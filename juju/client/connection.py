@@ -4,6 +4,7 @@
 import base64
 import json
 import logging
+from typing import Self
 import ssl
 import urllib.request
 import warnings
@@ -116,6 +117,7 @@ class Connection:
     "Maximum size for a single frame.  Defaults to 4MB."
     facades: Dict[str, int]
     _specified_facades: Dict[str, Sequence[int]]
+    monitor: Monitor
 
     @classmethod
     async def connect(
@@ -133,7 +135,7 @@ class Connection:
             proxy=None,
             debug_log_conn=None,
             debug_log_params={}
-    ):
+    ) -> Self:
         """Connect to the websocket.
 
         If uuid is None, the connection will be to the controller. Otherwise it

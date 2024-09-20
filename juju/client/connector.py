@@ -97,6 +97,9 @@ class Connector:
             if not ({'username', 'password'}.issubset(kwargs)):
                 required = {'username', 'password'}.difference(kwargs)
                 raise ValueError(f'Some authentication parameters are required : {",".join(required)}')
+            # FIXME ugly hack
+            # what if some values are not copyable or thread-safe?
+            self._kwargs_cache = kwargs.copy()
             self._connection = await Connection.connect(**kwargs)
 
         # Check if we support the target controller

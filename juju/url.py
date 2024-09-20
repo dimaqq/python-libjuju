@@ -1,7 +1,9 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
 from enum import Enum
+
 from .errors import JujuError
 from urllib.parse import urlparse
 
@@ -19,7 +21,17 @@ class Schema(Enum):
 
 
 class URL:
-    def __init__(self, schema, user=None, name=None, revision=None, series=None, architecture=None):
+    name: str
+
+    # FIXME looks like defaults for parts should be empty strings rather than None
+    def __init__(self,
+         schema,
+         user=None,
+         name: str = None,  # FIXME
+         revision=None,
+         series=None,
+         architecture=None,
+     ):
         self.schema = schema
         self.user = user
         self.name = name
@@ -32,7 +44,7 @@ class URL:
         self.architecture = architecture
 
     @staticmethod
-    def parse(s, default_store=Schema.CHARM_HUB):
+    def parse(s: str, default_store=Schema.CHARM_HUB) -> URL:
         """parse parses the provided charm URL string into its respective
             structure.
 
@@ -87,7 +99,7 @@ class URL:
         return "{}:{}".format(str(self.schema), self.path())
 
 
-def parse_v1_url(schema, u, s):
+def parse_v1_url(schema, u, s) -> URL:
     c = URL(schema)
 
     parts = u.path.split("/")
@@ -119,7 +131,7 @@ def parse_v1_url(schema, u, s):
     return c
 
 
-def parse_v2_url(u, s, default_store):
+def parse_v2_url(u, s, default_store) -> URL:
     if not u.scheme:
         c = URL(default_store)
     elif Schema.CHARM_HUB.matches(u.scheme):

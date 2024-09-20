@@ -1,24 +1,35 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 from typing import Dict, List, Optional, Union
+import warnings
 from pathlib import Path
-
 from typing_extensions import deprecated
+from typing_extensions import reveal_type as reveal_type
 
 from . import jasyncio, model, tag, utils
 from .annotationhelper import _get_annotations, _set_annotations
 from .bundle import get_charm_series, is_local_charm
-from .client import client, _definitions
+from .client import client
+from .client._definitions import (
+    ApplicationGetResults,
+    ApplicationInfoResult,
+    ApplicationResult,
+    CharmOrigin,
+)
 from .errors import JujuApplicationConfigError, JujuError
 from .origin import Channel
 from .placement import parse as parse_placement
 from .relation import Relation
 from .status import derive_status
+from ._sync import cache_until_await
 from .url import URL
+from .unit import Unit
 from .utils import block_until
 from .version import DEFAULT_ARCHITECTURE
 
@@ -42,7 +53,15 @@ class Application(model.ModelEntity):
 
     @property
     def exposed(self) -> bool:
-        return self.safe_data["exposed"]
+        """
+        Simon says to use this:
+        Applications[19].ApplicationInfo(*entities[tag:str])
+           -> results[n].result.exposed: bool
+       """
+        rv = self.safe_data["exposed"]
+        if (new := self._application_info().exposed) != rv:
+            warnings.warn(f"Mismatch in Application.exposed {(new, rv)}")
+        return rv
 
     @property
     @deprecated("Application.owner_tag is deprecated and will be removed in v4")
@@ -60,7 +79,15 @@ class Application(model.ModelEntity):
 
     @property
     def constraints(self) -> Dict[str, Union[str, int, bool]]:
-        return self.safe_data["constraints"]
+        rv = self.safe_data["constraints"]
+        # FIXME old code returned a sparse dict
+        # new code returns a filled-in dict-like
+        #
+        # behaviour is the same for user code app.constraints["arch"]
+        # but is different for app.constraints == expected
+        if (new := self._application_get().constraints) != rv:
+            warnings.warn(f"Mismatch in Application.constraints {(new, rv)}")
+        return rv
 
     @property
     @deprecated("Application.subordinate is deprecated and will be removed in v4")
@@ -71,6 +98,26 @@ class Application(model.ModelEntity):
     @deprecated("Application.workload_version is deprecated and will be removed in v4, use Unit.workload_version instead.")
     def workload_version(self) -> str:
         return self.safe_data["workload-version"]
+
+    @cache_until_await
+    def _application_get(self) -> ApplicationGetResults:
+        return self.model._sync_call(
+            self.model._helper_Application.Get(
+                application=self.name,
+        ))
+
+    @cache_until_await
+    def _application_info(self) -> ApplicationResult:
+        first = self.model._sync_call(
+            self.model._helper_Application.ApplicationsInfo(
+                entities=[client.Entity(self.tag)],
+        )).results[0]
+        # This API can get a bunch of results for a bunch of entities, or "tags"
+        # For each, either .result or .error is set by Juju, and an exception is
+        # raised on any .error by juju.client.connection.Connection.rpc()
+        assert first  # Work around #1111
+        assert first.result
+        return first.result
 
     @property
     def _unit_match_pattern(self):
@@ -99,7 +146,8 @@ class Application(model.ModelEntity):
             callable_, 'unit', 'remove', self._unit_match_pattern)
 
     @property
-    def units(self):
+    def units(self) -> List[Unit]:
+        # FIXME need a live call to query units of a given app
         return [
             unit for unit in self.model.units.values()
             if unit.application == self.name
@@ -129,7 +177,7 @@ class Application(model.ModelEntity):
         return apps
 
     @property
-    def status(self):
+    def status(self) -> str:
         """Get the application status.
 
         If the application is unknown it will attempt to derive the unit
@@ -156,7 +204,7 @@ class Application(model.ModelEntity):
         return self.safe_data['status']['message']
 
     @property
-    def tag(self):
+    def tag(self) -> str:
         return tag.application(self.name)
 
     async def add_relation(self, local_relation, remote_relation):
@@ -535,6 +583,12 @@ class Application(model.ModelEntity):
         client_facade = client.ClientFacade.from_connection(self.connection)
 
         full_status = await client_facade.FullStatus(patterns=None)
+
+        # import pprint
+        # with open("/tmp/full.status.jsonl", "a") as f:
+        #     print(file=f)
+        #     print(pprint.pformat(full_status.serialize()), file=f)
+
         _app = full_status.applications.get(self.name, None)
         if not _app:
             raise JujuError(f"application is not in FullStatus : {self.name}")
@@ -558,7 +612,7 @@ class Application(model.ModelEntity):
         data = file_obj.read()
 
         headers['Content-Type'] = 'application/octet-stream'
-        headers['Content-Length'] = len(data)
+        headers['Content-Length'] = len(data)  # type: ignore  # https://github.com/python/typeshed/pull/12704
         data_bytes = data if isinstance(data, bytes) else bytes(data, 'utf-8')
         headers['Content-Sha384'] = hashlib.sha384(data_bytes).hexdigest()
 
@@ -568,7 +622,7 @@ class Application(model.ModelEntity):
 
         headers['Content-Disposition'] = "form-data; filename=\"{}\"".format(file_name)
         headers['Accept-Encoding'] = 'gzip'
-        headers['Bakery-Protocol-Version'] = 3
+        headers['Bakery-Protocol-Version'] = 3  # type: ignore  # https://github.com/python/typeshed/pull/12704
         headers['Connection'] = 'close'
 
         conn.request('PUT', url, data, headers)
@@ -617,21 +671,70 @@ class Application(model.ModelEntity):
             units=[],
         )
 
+    _agc_value: ApplicationGetResults | None = None
+    _agc_exception: Exception | None = None
+
     @property
-    def charm_name(self):
+    def _application_get_cache(self) -> ApplicationGetResults:
+        if self._agc_value is None and self._agc_exception is None:
+            try:
+                self._agc_value = self.model._sync_call(self.model._helper_Application.Get(self.name))
+            except Exception as e:
+                self._agc_exception = e
+
+            def invalidate():
+                self._agc_value = self._agc_exception = None
+
+            asyncio.get_running_loop().call_soon(invalidate)
+
+        if self._agc_exception:
+            raise self._agc_exception
+        assert self._agc_value is not None
+        return self._agc_value
+
+    _aic_value: ApplicationInfoResult | None = None
+    _aic_exception: Exception | None = None
+
+    @property
+    def _application_info_cache(self) -> ApplicationInfoResult:
+        if self._aic_value is None and self._aic_exception is None:
+            try:
+                self._aic_value = self.model._sync_call(
+                    self.model._helper_Application.ApplicationsInfo(
+                        entities=[client.Entity(self.tag)],
+                )).results[0]
+            except Exception as e:
+                self._aic_exception = e
+        
+        if self._aic_exception:
+            raise self._aic_exception
+        assert self._aic_value is not None
+        return self._aic_value
+
+    @property
+    def charm_name(self) -> str:
         """Get the charm name of this application
 
         :return str: The name of the charm
         """
-        return URL.parse(self.charm_url).name
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            rv = URL.parse(self.charm_url).name
+            reveal_type(URL)
+            reveal_type(URL.parse)
+        if (new := self._application_get().charm) != rv:
+            warnings.warn(f"Mismatch in .charm_name {(new, rv)}")
+        return rv
 
     @property
-    def charm_url(self):
+    def charm_url(self) -> str:
         """Get the charm url for this application
 
         :return str: The charm url
         """
-        return self.safe_data['charm-url']
+        warnings.warn("Deprecated (FIXME: most likely)", DeprecationWarning)
+        rv = self.safe_data["charm-url"]
+        return rv
 
     async def get_annotations(self):
         """Get annotations on this application.
@@ -889,7 +992,7 @@ class Application(model.ModelEntity):
     async def local_refresh(
             self,
             *,
-            charm_origin: _definitions.CharmOrigin,
+            charm_origin: CharmOrigin,
             force: bool,
             force_series: bool,
             force_units: bool,
@@ -980,13 +1083,13 @@ class Application(model.ModelEntity):
 
 
 def _refresh_origin(
-        current_origin: client.CharmOrigin,
+        current_origin: CharmOrigin,
         channel: Optional[str] = None,
         revision: Optional[int] = None,
-) -> client.CharmOrigin:
+) -> CharmOrigin:
     chan = None if channel is None else Channel.parse(channel).normalize()
 
-    return client.CharmOrigin(
+    return CharmOrigin(
         source=current_origin.source,
         track=chan.track if chan else current_origin.track,
         risk=chan.risk if chan else current_origin.risk,

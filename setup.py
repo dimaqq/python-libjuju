@@ -22,11 +22,12 @@ setup(
     packages=find_packages(
         exclude=["*.tests", "*.tests.*", "tests.*", "tests"]),
     package_data={'juju': ['py.typed']},
+    python_requires=">=3.8",
     install_requires=[
         'macaroonbakery>=1.1,<2.0',
         'pyRFC3339>=1.0,<2.0',
         'pyyaml>=5.1.2',
-        'websockets>=8.1',
+        'websockets>=13.0.1',
         'paramiko>=2.4.0',
         'pyasn1>=0.4.4',
         'toposort>=1.5,<2',
@@ -36,6 +37,12 @@ setup(
         'packaging',
         'typing-extensions>=4.5.0',
     ],
+    extras_require={
+        "dev": [
+            "types-setuptools",
+            "pyright~=1.1",
+        ],
+    },
     include_package_data=True,
     maintainer='Juju Ecosystem Engineering',
     maintainer_email='juju@lists.ubuntu.com',
@@ -52,6 +59,9 @@ setup(
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
     ],
     entry_points={
         'console_scripts': [

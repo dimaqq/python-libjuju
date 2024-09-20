@@ -16,6 +16,10 @@ log = logging.getLogger(__name__)
 
 class Unit(model.ModelEntity):
     @property
+    def name(self) -> str:
+        return self.entity_id
+
+    @property
     def agent_status(self):
         """Returns the current agent status string.
 

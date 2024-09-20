@@ -51,7 +51,6 @@ async def test_deploy_local_bundle_dir():
             for (k, v) in model.applications.items():
                 writer.write(k)
         assert app1 and app2
-        # import pdb;pdb.set_trace()
         await model.wait_for_idle(['juju-qa-test', 'nrpe'], wait_for_at_least_units=1)
 
 

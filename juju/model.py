@@ -1,5 +1,6 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
 import base64
 import collections
@@ -18,6 +19,21 @@ from concurrent.futures import CancelledError
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
+from typing import (
+    Any,
+    Coroutine,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    overload,
+    Set,
+    TypeVar,
+    TYPE_CHECKING,
+    # Union,
+)
+from typing_extensions import reveal_type as reveal_type
 
 import yaml
 import websockets
@@ -26,7 +42,7 @@ from . import provisioner, tag, utils, jasyncio
 from .annotationhelper import _get_annotations, _set_annotations
 from .bundle import BundleHandler, get_charm_series, is_local_charm
 from .charmhub import CharmHub
-from .client import client, connector
+from .client import client, connection, connector, protocols
 from .client.overrides import Caveat, Macaroon
 from .constraints import parse as parse_constraints
 from .controller import Controller, ConnectedController
@@ -43,6 +59,15 @@ from .secrets import create_secret_data, read_secret_data
 from .tag import application as application_tag
 from .url import URL, Schema
 from .version import DEFAULT_ARCHITECTURE
+from ._sync import SyncCacheLine, ThreadedAsyncRunner
+
+if TYPE_CHECKING:
+    from .client._definitions import FullStatus, UnitStatus
+    from .application import Application
+    from .machine import Machine
+    from .relation import Relation
+    from .remoteapplication import ApplicationOffer, RemoteApplication
+    from .unit import Unit
 
 log = logging.getLogger(__name__)
 
@@ -123,7 +148,27 @@ class ModelState:
         self.model = model
         self.state = dict()
 
-    def _live_entity_map(self, entity_type):
+    @overload
+    def _live_entity_map(self, entity_type: Literal["application"]) -> Dict[str, Application]: ...
+
+    @overload
+    def _live_entity_map(self, entity_type: Literal["applicationOffer"]) -> Dict[str, ApplicationOffer]: ...
+
+    @overload
+    def _live_entity_map(self, entity_type: Literal["machine"]) -> Dict[str, Machine]: ...
+
+    @overload
+    def _live_entity_map(self, entity_type: Literal["relation"]) -> Dict[str, Relation]: ...
+
+    @overload
+    def _live_entity_map(self, entity_type: Literal["remoteApplication"]) -> Dict[str, RemoteApplication]: ...
+
+    @overload
+    def _live_entity_map(self, entity_type: Literal["unit"]) -> Dict[str, Unit]: ...
+
+    # FIXME and all the other types
+
+    def _live_entity_map(self, entity_type: str) -> Mapping[str, ModelEntity]:
         """Return an id:Entity map of all the living entities of
         type ``entity_type``.
 
@@ -135,7 +180,7 @@ class ModelState:
         }
 
     @property
-    def applications(self):
+    def applications(self) -> dict[str, Application]:
         """Return a map of application-name:Application for all applications
         currently in the model.
 
@@ -143,7 +188,7 @@ class ModelState:
         return self._live_entity_map('application')
 
     @property
-    def remote_applications(self):
+    def remote_applications(self) -> Dict[str, RemoteApplication]:
         """Return a map of application-name:Application for all remote
         applications currently in the model.
 
@@ -151,14 +196,14 @@ class ModelState:
         return self._live_entity_map('remoteApplication')
 
     @property
-    def application_offers(self):
+    def application_offers(self) -> Dict[str, ApplicationOffer]:
         """Return a map of application-name:Application for all applications
         offers currently in the model.
         """
         return self._live_entity_map('applicationOffer')
 
     @property
-    def machines(self):
+    def machines(self) -> Dict[str, Machine]:  # FIXME validate that key is in fact a string
         """Return a map of machine-id:Machine for all machines currently in
         the model.
 
@@ -166,7 +211,7 @@ class ModelState:
         return self._live_entity_map('machine')
 
     @property
-    def units(self):
+    def units(self) -> Dict[str, Unit]:
         """Return a map of unit-id:Unit for all units currently in
         the model.
 
@@ -179,7 +224,7 @@ class ModelState:
         return {u_name: u for u_name, u in self.units.items() if u.is_subordinate}
 
     @property
-    def relations(self):
+    def relations(self) -> Dict[str, Relation]:
         """Return a map of relation-id:Relation for all relations currently in
         the model.
 
@@ -223,10 +268,12 @@ class ModelState:
             history.append(None)
 
         entity = self.get_entity(delta.entity, delta.get_id())
+        assert entity
         return entity.previous(), entity
 
+    # FIXME this function may explicitly return None, but is the rest of the code prepared for that?
     def get_entity(
-            self, entity_type, entity_id, history_index=-1, connected=True):
+            self, entity_type, entity_id, history_index=-1, connected=True) -> Optional[ModelEntity]:
         """Return an object instance for the given entity_type and id.
 
         By default the object state matches the most recent state from
@@ -253,8 +300,15 @@ class ModelState:
 
 class ModelEntity:
     """An object in the Model tree"""
+    entity_id: str
+    model: Model
+    _history_index: int
+    connected: bool
+    connection: connection.Connection
+    _status: str
+    _sync_cache: Dict[str, SyncCacheLine]
 
-    def __init__(self, entity_id, model, history_index=-1, connected=True):
+    def __init__(self, entity_id, model: Model, history_index=-1, connected=True):
         """Initialize a new entity
 
         :param entity_id str: The unique id of the object in the model
@@ -272,6 +326,7 @@ class ModelEntity:
         self.connected = connected
         self.connection = model.connection()
         self._status = 'unknown'
+        self._sync_cache = {}
 
     def __repr__(self):
         return '<{} entity_id="{}">'.format(type(self).__name__,
@@ -542,11 +597,16 @@ class CharmhubDeployType:
             is_bundle=is_bundle,
         )
 
+R = TypeVar("R")
 
 class Model:
     """
     The main API for interacting with a Juju model.
     """
+    connector: connector.Connector
+    state: ModelState
+    _sync: ThreadedAsyncRunner | None = None
+
     def __init__(
         self,
         max_frame_size=None,
@@ -586,6 +646,28 @@ class Model:
             Schema.LOCAL: LocalDeployType(),
             Schema.CHARM_HUB: CharmhubDeployType(self._resolve_charm),
         }
+
+    def _sync_call(self, coro: Coroutine[None, None, R]) -> R:
+        assert self._sync
+        return self._sync.call(coro)
+
+    @property
+    def _helper_Application(self) -> protocols.ApplicationFacadeProtocol:
+        """An ApplicationFacade suitable for ._sync.call(...)"""
+        assert self._sync
+        return client.ApplicationFacade.from_connection(self._sync.connection)
+
+    @property
+    def _helper_Charms(self) -> protocols.CharmsFacadeProtocol:
+        assert self._sync
+        return client.CharmsFacade.from_connection(self._sync.connection)
+
+    @property
+    def _helper_Uniter(self) -> protocols.UniterFacadeProtocol:
+        """A UniterFacade suitable for ._sync.call(...)"""
+        assert self._sync
+        return client.UniterFacade.from_connection(self._sync.connection)
+
 
     def is_connected(self):
         """Reports whether the Model is currently connected."""
@@ -704,6 +786,9 @@ class Model:
         if not is_debug_log_conn:
             await self._after_connect(model_name, model_uuid)
 
+        self._sync = ThreadedAsyncRunner.new_connected(
+            connection_kwargs=self._connector._kwargs_cache)
+
     async def connect_model(self, model_name, **kwargs):
         """
         .. deprecated:: 0.6.2
@@ -778,6 +863,10 @@ class Model:
         """Shut down the watcher task and close websockets.
 
         """
+        if self._sync:
+            self._sync.stop()
+            self._sync = None
+
         if not self._watch_stopped.is_set():
             log.debug('Stopping watcher task')
             self._watch_stopping.set()
@@ -839,7 +928,9 @@ class Model:
            instead.
 
         """
-        conn, headers, path_prefix = self.connection().https_connection()
+        connection = self.connection()
+        assert connection
+        conn, headers, path_prefix = connection.https_connection()
         path = "%s/charms?series=%s" % (path_prefix, series)
         headers['Content-Type'] = 'application/zip'
         if size:
@@ -1053,7 +1144,7 @@ class Model:
         return tag.model(self.uuid)
 
     @property
-    def applications(self):
+    def applications(self) -> dict[str, Application]:
         """Return a map of application-name:Application for all applications
         currently in the model.
 
@@ -1061,7 +1152,7 @@ class Model:
         return self.state.applications
 
     @property
-    def remote_applications(self):
+    def remote_applications(self) -> Dict[str, RemoteApplication]:
         """Return a map of application-name:Application for all remote
         applications currently in the model.
 
@@ -1069,14 +1160,14 @@ class Model:
         return self.state.remote_applications
 
     @property
-    def application_offers(self):
+    def application_offers(self) -> Dict[str, ApplicationOffer]:
         """Return a map of application-name:Application for all applications
         offers currently in the model.
         """
         return self.state.application_offers
 
     @property
-    def machines(self):
+    def machines(self) -> Dict[str, Machine]:  # FIXME validate that key is string and not an int
         """Return a map of machine-id:Machine for all machines currently in
         the model.
 
@@ -1084,7 +1175,7 @@ class Model:
         return self.state.machines
 
     @property
-    def units(self):
+    def units(self) -> Dict[str, Unit]:
         """Return a map of unit-id:Unit for all units currently in
         the model.
 
@@ -1124,11 +1215,12 @@ class Model:
         return self._info.name
 
     @property
-    def info(self):
+    def info(self) -> ModelInfo:
         """Return the cached client.ModelInfo object for this Model.
 
         If Model.get_info() has not been called, this will return None.
         """
+        assert self._info is not None
         return self._info
 
     @property
@@ -1222,12 +1314,14 @@ class Model:
                         del allwatcher.Id
                         continue
                     except websockets.ConnectionClosed:
-                        monitor = self.connection().monitor
+                        connection = self.connection()
+                        assert connection
+                        monitor = connection.monitor
                         if monitor.status == monitor.ERROR:
                             # closed unexpectedly, try to reopen
                             log.warning(
                                 'Watcher: connection closed, reopening')
-                            await self.connection().reconnect()
+                            await connection.reconnect()
                             if monitor.status != monitor.CONNECTED:
                                 # reconnect failed; abort and shutdown
                                 log.error('Watcher: automatic reconnect '
@@ -2456,7 +2550,7 @@ class Model:
             results[tag.untag('action-', a.action.tag)] = a.status
         return results
 
-    async def get_status(self, filters=None, utc=False):
+    async def get_status(self, filters=None, utc=False) -> FullStatus:
         """Return the status of the model.
 
         :param str filters: Optional list of applications, units, or machines
@@ -2489,6 +2583,7 @@ class Model:
         for entity_metrics in metrics_result.results:
             error = entity_metrics.error
             if error:
+                # FIXME why is bad tag handling specific to this one method?
                 if "is not a valid tag" in error:
                     raise ValueError(error.message)
                 else:
@@ -2788,9 +2883,35 @@ class Model:
         await controller.connect(controller_name=controller_name)
         return controller
 
-    async def wait_for_idle(self, apps=None, raise_on_error=True, raise_on_blocked=False,
-                            wait_for_active=False, timeout=10 * 60, idle_period=15, check_freq=0.5,
-                            status=None, wait_for_at_least_units=None, wait_for_exact_units=None):
+    # FIXME scraped from charm collection
+    # apps
+    # - most common: [explicit, list, of, apps]
+    # - rare: implicit None
+    # status
+    # - common implicit None
+    # - common "active"
+    # - rare "blocked"
+    # - very rare "unknown"
+    #
+    # wait_for_at_least_units:
+    # - is used, const values like 1, 2, or 3i
+    # - may be used with 2 apps, 1 or 2 units
+    # wait_for_exact_units:
+    # - pretty common, const value or parametric
+    # - rarely used with 0 units, after explicit .scale(scale=0)
+    # - there's a test for 0 units, implying that all apps are gone
+    async def wait_for_idle(self,
+        apps: Optional[List[str]] = None,
+        raise_on_error: bool = True,
+        raise_on_blocked: bool = False,
+        wait_for_active: bool = False,
+        timeout: Optional[float] = 10 * 60,
+        idle_period: float = 15,
+        check_freq=0.5,
+        status: Optional[str] = None,
+        wait_for_at_least_units: Optional[int] = None,
+        wait_for_exact_units: Optional[int] = None,
+    ):
         """Wait for applications in the model to settle into an idle state.
 
         :param List[str] apps: Optional list of specific app names to wait on.
@@ -2841,8 +2962,6 @@ class Model:
 
         _wait_for_units = wait_for_at_least_units if wait_for_at_least_units is not None else 1
 
-        timeout = timedelta(seconds=timeout) if timeout is not None else None
-        idle_period = timedelta(seconds=idle_period)
         start_time = datetime.now()
         # Type check against the common error of passing a str for apps
         if apps is not None and (not isinstance(apps, list) or
@@ -2850,127 +2969,338 @@ class Model:
                                      for o in apps)):
             raise JujuError(f'Expected a List[str] for apps, given {apps}')
 
-        apps = apps or self.applications
-        idle_times = {}
-        units_ready = set()  # The units that are in the desired state
-        last_log_time = None
-        log_interval = timedelta(seconds=30)
-
-        def _raise_for_status(entities, status):
-            if not entities:
-                return
-            for entity_name, error_type in (("Machine", JujuMachineError),
-                                            ("Agent", JujuAgentError),
-                                            ("Unit", JujuUnitError),
-                                            ("App", JujuAppError)):
-                errored = entities.get(entity_name, [])
-                if not errored:
-                    continue
-                raise error_type("{}{} in {}: {}".format(
-                    entity_name,
-                    "s" if len(errored) > 1 else "",
-                    status,
-                    ", ".join(errored),
-                ))
+        # apps narrowed to List[str]
+        # FIXME switch to lazy evaluations of "expected apps"
+        apps = apps or list(self.applications)
+        idle_times: Dict[str, datetime] = {}
+        units_ready: Set[str] = set()  # The units that are in the desired state
+        last_log_time: List[Optional[datetime]] = [None]
 
         if wait_for_exact_units is not None:
             assert isinstance(wait_for_exact_units, int) and wait_for_exact_units >= 0, \
                 'Invalid value for wait_for_exact_units : %s' % wait_for_exact_units
 
         while True:
-            # The list 'busy' is what keeps this loop going,
-            # i.e. it'll stop when busy is empty after all the
-            # units are scanned
-            busy = []
-            errors = {}
-            blocks = {}
-            for app_name in apps:
-                if app_name not in self.applications:
-                    busy.append(app_name + " (missing)")
+            exc: Optional[Exception] = None
+            legacy_exc: Optional[Exception] = None
+            idle = legacy_idle = False
+            try:
+                idle = await self._check_idle(
+                    apps=apps,
+                    raise_on_error=raise_on_error,
+                    raise_on_blocked=raise_on_blocked,
+                    status=status,
+                    wait_for_at_least_units=wait_for_at_least_units,
+                    wait_for_exact_units=wait_for_exact_units,
+                    timeout=timeout,
+                    idle_period=idle_period,
+                    _wait_for_units=_wait_for_units,
+                    idle_times=idle_times,
+                    units_ready=units_ready,
+                    last_log_time=last_log_time,
+                    start_time=start_time,
+                )
+            except Exception as e:
+                exc = e
+
+            try:
+                legacy_idle = await self._legacy_check_idle(
+                    apps=apps,
+                    raise_on_error=raise_on_error,
+                    raise_on_blocked=raise_on_blocked,
+                    status=status,
+                    wait_for_at_least_units=wait_for_at_least_units,
+                    wait_for_exact_units=wait_for_exact_units,
+                    timeout=timeout,
+                    idle_period=idle_period,
+                    _wait_for_units=_wait_for_units,
+                    idle_times=idle_times,
+                    units_ready=units_ready,
+                    last_log_time=last_log_time,
+                    start_time=start_time,
+                )
+            except Exception as e:
+                legacy_exc = e
+
+            if bool(exc) ^ bool(legacy_exc):
+                warnings.warn(f"Idle loop mismatch: {[exc, legacy_exc]}")
+
+            if exc:
+                raise exc
+            if legacy_exc:
+                raise legacy_exc
+
+            if idle ^ legacy_idle:
+                warnings.warn(f"Idle loop mismatch: {[idle, legacy_idle]}")
+
+            if idle or legacy_idle:
+                return
+
+            await jasyncio.sleep(check_freq)
+
+    async def _check_idle(
+        self,
+        *,
+        apps: List[str],
+        raise_on_error: bool,
+        raise_on_blocked: bool,
+        status: Optional[str],
+        wait_for_at_least_units: Optional[int],
+        wait_for_exact_units: Optional[int],
+        timeout: Optional[float],
+        idle_period: float,
+        _wait_for_units: int,
+        idle_times: Dict[str, datetime],
+        units_ready: Set[str],
+        last_log_time: List[Optional[datetime]],
+        start_time: datetime,
+    ) -> bool:
+        now = datetime.now()
+        expected_idle_since = now - timedelta(seconds=idle_period)
+        full_status = await self.get_status()
+        #import pdb; pdb.set_trace()
+
+        # FIXME check this precedence
+        for app_name in apps:
+            if not full_status.applications.get(app_name):
+                logging.info("Waiting for app %r", app_name)
+                return False
+
+        # Order of errors:
+        #
+        # Machine error (any unit of any app from apps)
+        # Agent error (-"-)
+        # Workload error (-"-)
+        # App error (any app from apps)
+        #
+        # Workload blocked (any unit of any app from apps)
+        # App blocked (any app from apps)
+        units: Dict[str, UnitStatus] = {}
+
+        for app_name in apps:
+            #assert full_status.applications[app_name]
+            app = full_status.applications[app_name]
+            assert app
+            for unit_name, unit in app.units.items():
+                assert unit
+                units[unit_name] = unit
+
+        for unit_name, unit in units.items():
+            if unit.machine:
+                machine = full_status.machines[unit.machine]
+                assert machine
+                assert machine.instance_status
+                if machine.instance_status.status == "error" and raise_on_error:
+                    raise JujuMachineError(
+                        f"{unit_name!r} machine {unit.machine!r} has errored: {machine.instance_status.info!r}")
+
+        for unit_name, unit in units.items():
+            assert unit.agent_status
+            if unit.agent_status.status == "error" and raise_on_error:
+                raise JujuAgentError(
+                    f"{unit_name!r} agent has errored: {unit.agent_status.info!r}")
+
+        for unit_name, unit in units.items():
+            assert unit.workload_status
+            if unit.workload_status.status == "error" and raise_on_error:
+                raise JujuUnitError(
+                    f"{unit_name!r} workload has errored: {unit.workload_status.info!r}")
+
+        for app_name in apps:
+            app = full_status.applications[app_name]
+            assert app
+            assert app.status
+            if app.status.status == "error" and raise_on_error:
+                raise JujuAppError(f"{app_name!r} has errored: {app.status.info!r}")
+
+        for unit_name, unit in units.items():
+            assert unit.workload_status
+            if unit.workload_status.status == "blocked" and raise_on_blocked:
+                raise JujuUnitError(
+                    f"{unit_name!r} workload is blocked: {unit.workload_status.info!r}")
+
+        for app_name in apps:
+            app = full_status.applications[app_name]
+            assert app
+            assert app.status
+            if app.status.status == "blocked" and raise_on_blocked:
+                raise JujuAppError(f"{app_name!r} is blocked: {app.status.info!r}")
+
+        for unit_name, unit in units.items():
+            assert unit.agent_status
+            idle_times.setdefault(unit_name, now)
+            if unit.agent_status.status != "idle":
+                idle_times[unit_name] = now
+
+        for app_name in apps:
+            ready_units = []
+            app = full_status.applications[app_name]
+            assert app
+            for unit_name, unit in app.units.items():
+                assert unit
+                assert unit.agent_status
+                assert unit.workload_status
+
+                if unit.agent_status.status != "idle":
                     continue
-                app = self.applications[app_name]
-                app_status = await app.get_status()
-                if raise_on_error and app_status == "error":
-                    errors.setdefault("App", []).append(app.name)
-                if raise_on_blocked and app_status == "blocked":
-                    blocks.setdefault("App", []).append(app.name)
-
-                # Check if wait_for_exact_units flag is used
-                if wait_for_exact_units is not None:
-                    if len(app.units) != wait_for_exact_units:
-                        busy.append(app.name + " (waiting for exactly %s units, current : %s)" %
-                                    (wait_for_exact_units, len(app.units)))
-                        continue
-                # If we have less # of units then required, then wait a bit more
-                elif len(app.units) < _wait_for_units:
-                    busy.append(app.name + " (not enough units yet - %s/%s)" %
-                                (len(app.units), _wait_for_units))
+                if status and unit.workload_status.status != status:
                     continue
-                # User is waiting for at least a certain # of units, and we have enough
-                elif wait_for_at_least_units and len(units_ready) >= _wait_for_units:
-                    # So no need to keep looking, we have the desired number of units ready to go,
-                    # exit the loop. Don't just return here, though, we might still have some
-                    # errors to raise at the end
-                    break
-                for unit in app.units:
-                    if raise_on_error and unit.machine is not None and unit.machine.status == "error":
-                        errors.setdefault("Machine", []).append(unit.machine.id)
-                        continue
-                    if raise_on_error and unit.agent_status == "error":
-                        errors.setdefault("Agent", []).append(unit.name)
-                        continue
-                    if raise_on_error and unit.workload_status == "error":
-                        errors.setdefault("Unit", []).append(unit.name)
-                        continue
-                    if raise_on_blocked and unit.workload_status == "blocked":
-                        blocks.setdefault("Unit", []).append(unit.name)
-                        continue
-                    # TODO (cderici): we need two versions of wait_for_idle, one for waiting on
-                    #  individual units, another one for waiting for an application.
-                    #  The convoluted logic below is the result of trying to do both at the same
-                    #  time
-                    need_to_wait_more_for_a_particular_status = status and (unit.workload_status != status)
-                    app_is_in_desired_status = (not status) or (app_status == status)
-                    if not need_to_wait_more_for_a_particular_status and \
-                            unit.agent_status == "idle" and \
-                            (wait_for_at_least_units or app_is_in_desired_status):
-                        # A unit is ready if either:
-                        # 1) Don't need to wait more for a particular status and the agent is "idle"
-                        # 2) We're looking for a particular status and the unit's workload,
-                        # as well as the application, is in that status. If the user wants to
-                        # see only a particular number of units in that state -- i.e. a subset of
-                        # the units is needed, then we don't care about the application status
-                        # (because e.g. app can be in 'waiting' while unit.0 is 'active' and unit.1
-                        # is 'waiting')
 
-                        # Either way, the unit is ready, start measuring the time period that
-                        # it needs to stay in that state (i.e. idle_period)
-                        units_ready.add(unit.name)
-                        now = datetime.now()
-                        idle_start = idle_times.setdefault(unit.name, now)
+                ready_units.append(unit)
 
-                        if now - idle_start < idle_period:
-                            busy.append("{} [{}] {}: {}".format(unit.name,
-                                                                unit.agent_status,
-                                                                unit.workload_status,
-                                                                unit.workload_status_message))
-                    else:
-                        idle_times.pop(unit.name, None)
+            if wait_for_exact_units is None and len(ready_units) < _wait_for_units:
+                logging.info("Waiting for app %r units %s/%s",
+                             app_name, len(ready_units), _wait_for_units)
+                return False
+
+            if wait_for_exact_units is not None and len(ready_units) != wait_for_exact_units:
+                logging.info("Waiting for app %r units %s/%s",
+                             app_name, len(ready_units), _wait_for_units)
+                return False
+
+        if (busy := [n for n, t in idle_times.items() if expected_idle_since < t]):
+            logging.info("Waiting for %s to be idle enough", busy)
+            return False
+
+        return True
+
+    async def _legacy_check_idle(
+        self,
+        *,
+        apps: List[str],
+        raise_on_error: bool,
+        raise_on_blocked: bool,
+        status: Optional[str],
+        wait_for_at_least_units: Optional[int],
+        wait_for_exact_units: Optional[int],
+        timeout: Optional[float],
+        idle_period: float,
+        _wait_for_units: int,
+        idle_times: Dict[str, datetime],
+        units_ready: Set[str],
+        last_log_time: List[Optional[datetime]],  # = [None]
+        start_time: datetime,
+    ):
+        _timeout = timedelta(seconds=timeout) if timeout is not None else None
+        _idle_period = timedelta(seconds=idle_period)
+        log_interval = timedelta(seconds=30)
+        # The list 'busy' is what keeps this loop going,
+        # i.e. it'll stop when busy is empty after all the
+        # units are scanned
+        busy: List[str] = []
+        errors: Dict[Literal["Machine", "Agent", "App", "Unit"], List[Any]] = {}
+        blocks: Dict[Literal["Machine", "Agent", "App", "Unit"], List[Any]] = {}
+
+        for app_name in apps:
+            if app_name not in self.applications:
+                busy.append(app_name + " (missing)")
+                return False
+            app = self.applications[app_name]
+            app_status = await app.get_status()
+            if raise_on_error and app_status == "error":
+                errors.setdefault("App", []).append(app.name)
+            if raise_on_blocked and app_status == "blocked":
+                blocks.setdefault("App", []).append(app.name)
+
+            # Check if wait_for_exact_units flag is used
+            if wait_for_exact_units is not None:
+                if len(app.units) != wait_for_exact_units:
+                    busy.append(app.name + " (waiting for exactly %s units, current : %s)" %
+                                (wait_for_exact_units, len(app.units)))
+                    return False
+            # If we have less # of units then required, then wait a bit more
+            elif len(app.units) < _wait_for_units:
+                busy.append(app.name + " (not enough units yet - %s/%s)" %
+                            (len(app.units), _wait_for_units))
+                return False
+            # User is waiting for at least a certain # of units, and we have enough
+            # Note: `units_ready` is maintained by this function, we're seeing the
+            # value from the previous iteration of the `.wait_for_idle(...)` loop.
+            elif wait_for_at_least_units and len(units_ready) >= _wait_for_units:
+                # So no need to keep looking, we have the desired number of units ready to go,
+                # exit the loop. Don't just return here, though, we might still have some
+                # errors to raise at the end
+                return True
+            for unit in app.units:
+                if raise_on_error and unit.machine is not None and unit.machine.status == "error":
+                    errors.setdefault("Machine", []).append(unit.machine.id)
+                    continue
+                if raise_on_error and unit.agent_status == "error":
+                    errors.setdefault("Agent", []).append(unit.name)
+                    continue
+                if raise_on_error and unit.workload_status == "error":
+                    errors.setdefault("Unit", []).append(unit.name)
+                    continue
+                if raise_on_blocked and unit.workload_status == "blocked":
+                    blocks.setdefault("Unit", []).append(unit.name)
+                    continue
+                # TODO (cderici): we need two versions of wait_for_idle, one for waiting on
+                #  individual units, another one for waiting for an application.
+                #  The convoluted logic below is the result of trying to do both at the same
+                #  time
+                need_to_wait_more_for_a_particular_status = status and (unit.workload_status != status)
+                app_is_in_desired_status = (not status) or (app_status == status)
+                if not need_to_wait_more_for_a_particular_status and \
+                        unit.agent_status == "idle" and \
+                        (wait_for_at_least_units or app_is_in_desired_status):
+                    # A unit is ready if either:
+                    # 1) Don't need to wait more for a particular status and the agent is "idle"
+                    # 2) We're looking for a particular status and the unit's workload,
+                    # as well as the application, is in that status. If the user wants to
+                    # see only a particular number of units in that state -- i.e. a subset of
+                    # the units is needed, then we don't care about the application status
+                    # (because e.g. app can be in 'waiting' while unit.0 is 'active' and unit.1
+                    # is 'waiting')
+
+                    # Either way, the unit is ready, start measuring the time period that
+                    # it needs to stay in that state (i.e. idle_period)
+                    units_ready.add(unit.name)
+                    now = datetime.now()
+                    idle_start = idle_times.setdefault(unit.name, now)
+
+                    if now - idle_start < _idle_period:
                         busy.append("{} [{}] {}: {}".format(unit.name,
                                                             unit.agent_status,
                                                             unit.workload_status,
                                                             unit.workload_status_message))
-            _raise_for_status(errors, "error")
-            _raise_for_status(blocks, "blocked")
-            if not busy:
-                break
-            busy = "\n  ".join(busy)
-            if timeout is not None and datetime.now() - start_time > timeout:
-                raise jasyncio.TimeoutError("Timed out waiting for model:\n" + busy)
-            if last_log_time is None or datetime.now() - last_log_time > log_interval:
-                log.info("Waiting for model:\n  " + busy)
-                last_log_time = datetime.now()
-            await jasyncio.sleep(check_freq)
+                else:
+                    idle_times.pop(unit.name, None)
+                    busy.append("{} [{}] {}: {}".format(unit.name,
+                                                        unit.agent_status,
+                                                        unit.workload_status,
+                                                        unit.workload_status_message))
+        _raise_for_status(errors, "error")
+        _raise_for_status(blocks, "blocked")
+
+        if not busy:
+            return True
+
+        if _timeout is not None and datetime.now() - start_time > _timeout:
+            raise jasyncio.TimeoutError("\n  ".join(["Timed out waiting for model:", *busy]))
+
+        if last_log_time[0] is None or datetime.now() - last_log_time[0] > log_interval:
+            log.info("\n  ".join(["Waiting for model:", *busy]))
+            last_log_time[0] = datetime.now()
+
+        return False
+
+
+def _raise_for_status(entities: Dict, status: Any) -> None:
+    if not entities:
+        return
+    for entity_name, error_type in (("Machine", JujuMachineError),
+                                    ("Agent", JujuAgentError),
+                                    ("Unit", JujuUnitError),
+                                    ("App", JujuAppError)):
+        errored = entities.get(entity_name, [])
+        if not errored:
+            continue
+        raise error_type("{}{} in {}: {}".format(
+            entity_name,
+            "s" if len(errored) > 1 else "",
+            status,
+            ", ".join(errored),
+        ))
 
 
 def _create_consume_args(offer, macaroon, controller_info):

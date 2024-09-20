@@ -1,5 +1,6 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
 import argparse
 import builtins
@@ -13,7 +14,7 @@ import typing
 from collections import defaultdict
 from glob import glob
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import overload, Any, Dict, List, Mapping, Optional, Sequence, TypeVar, Type as TypingType
 
 import packaging.version
 import typing_inspect
@@ -489,31 +490,42 @@ def ReturnMapping(cls):
     def decorator(f):
         @functools.wraps(f)
         async def wrapper(*args, **kwargs):
-            nonlocal cls
             reply = await f(*args, **kwargs)
-            if cls is None:
-                return reply
-            if 'error' in reply:
-                cls = CLASSES['Error']
-            if typing_inspect.is_generic_type(cls) and issubclass(typing_inspect.get_origin(cls), Sequence):
-                parameters = typing_inspect.get_parameters(cls)
-                result = []
-                item_cls = parameters[0]
-                for item in reply:
-                    result.append(item_cls.from_json(item))
-                    """
-                    if 'error' in item:
-                        cls = CLASSES['Error']
-                    else:
-                        cls = item_cls
-                    result.append(cls.from_json(item))
-                    """
-            else:
-                result = cls.from_json(reply['response'])
-
-            return result
+            return _convert_response(reply, cls=cls)
         return wrapper
     return decorator
+
+
+@overload
+def _convert_response(response: Dict, *, cls: TypingType[SomeType]) -> SomeType: ...
+
+
+@overload
+def _convert_response(response: Dict, *, cls: None) -> Dict: ...
+
+
+def _convert_response(response: dict, *, cls: Optional[TypingType[Type]]):
+    if cls is None:
+        return response
+    if 'error' in response:
+        cls = CLASSES['Error']
+    if typing_inspect.is_generic_type(cls) and issubclass(typing_inspect.get_origin(cls), Sequence):
+        parameters = typing_inspect.get_parameters(cls)
+        result = []
+        item_cls = parameters[0]
+        for item in response:
+            result.append(item_cls.from_json(item))
+            """
+            if 'error' in item:
+                cls = CLASSES['Error']
+            else:
+                cls = item_cls
+            result.append(cls.from_json(item))
+            """
+    else:
+        result = cls.from_json(response['response'])
+
+    return result
 
 
 def makeFunc(cls, name, description, params, result, _async=True):
@@ -670,6 +682,7 @@ class Type:
     def from_json(cls, data):
         def _parse_nested_list_entry(expr, result_dict):
             if isinstance(expr, str):
+                # FIXME uinreachable code, see #1111
                 if '>' in expr or '>=' in expr:
                     # something like juju >= 2.9.31
                     i = expr.index('>')
@@ -680,9 +693,11 @@ class Type:
                     # this is a simple entry
                     result_dict[expr] = ''
             elif isinstance(expr, dict):
+                # FIXME uinreachable code, see #1111
                 for _, v in expr.items():
                     _parse_nested_list_entry(v, result_dict)
             elif isinstance(expr, list):
+                # FIXME am I crazy? or is this crazy?
                 for v in expr:
                     _parse_nested_list_entry(v, result_dict)
             else:
@@ -739,6 +754,9 @@ class Type:
         except KeyError:
             return default
         return getattr(self, attr, default)
+
+
+SomeType = TypeVar("SomeType", bound=Type)
 
 
 class Schema(dict):

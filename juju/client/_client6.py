@@ -1338,6 +1338,12 @@ class ClientFacade(Type):
                    params=_params)
         _params['patterns'] = patterns
         reply = await self.rpc(msg)
+
+        import pprint
+        with open("/tmp/full.status.jsonl", "a") as f:
+            print(file=f)
+            print("#6", file=f)
+            print(pprint.pformat(reply), file=f)
         return reply
 
 
