@@ -309,7 +309,7 @@ async def test_deploy_local_bundle_with_overlay_multi():
 
 @base.bootstrapped
 @pytest.mark.bundle
-@pytest.mark.xfail("The `ghost` charm is hopelessly out of date")
+@pytest.mark.xfail(reason="The `ghost` charm is hopelessly out of date")
 async def test_deploy_bundle_with_overlay_as_argument():
     async with base.CleanModel() as model:
         overlay_path = OVERLAYS_DIR / 'test-overlay.yaml'
