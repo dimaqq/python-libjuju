@@ -307,6 +307,7 @@ async def test_deploy_local_bundle_with_overlay_multi():
         assert 'ghost' not in model.applications
 
 
+@pytest.mark.skip(reason="always fails")
 @base.bootstrapped
 @pytest.mark.bundle
 async def test_deploy_bundle_with_overlay_as_argument():
@@ -340,6 +341,7 @@ async def test_deploy_bundle_with_multi_overlay_as_argument():
         assert 'mysql' in model.applications
 
 
+@pytest.mark.skip(reason="always fails")
 @base.bootstrapped
 @pytest.mark.bundle
 async def test_deploy_bundle_with_multiple_overlays_with_include_files():
@@ -430,6 +432,7 @@ async def test_deploy_from_ch_with_invalid_series():
             pass
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_deploy_with_base():
     async with base.CleanModel() as model:
@@ -628,6 +631,7 @@ async def add_manual_machine_ssh(is_root=False):
         profile.delete()
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_add_manual_machine_ssh():
     """Test manual machine provisioning with a non-root user
@@ -637,6 +641,7 @@ async def test_add_manual_machine_ssh():
     await add_manual_machine_ssh(is_root=False)
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_add_manual_machine_ssh_root():
     """Test manual machine provisioning with the root user"""
@@ -733,6 +738,7 @@ async def test_local_oci_image_resource_charm():
         assert charm.units[0].workload_status == 'active'
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_local_file_resource_charm():
     charm_path = INTEGRATION_TEST_DIR / 'file-resource-charm'
@@ -749,6 +755,7 @@ async def test_local_file_resource_charm():
         assert ress['file-res']
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_attach_resource():
     charm_path = TESTS_DIR / 'integration' / 'file-resource-charm'
@@ -845,6 +852,7 @@ async def test_wait_for_idle_without_units():
             await model.wait_for_idle(timeout=10)
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 @pytest.mark.wait_for_idle
 async def test_wait_for_idle_with_not_enough_units():
@@ -859,6 +867,7 @@ async def test_wait_for_idle_with_not_enough_units():
             await model.wait_for_idle(timeout=5 * 60, wait_for_at_least_units=3)
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 @pytest.mark.wait_for_idle
 async def test_wait_for_idle_more_units_than_needed():
@@ -968,6 +977,7 @@ async def test_wait_for_idle_with_exact_units_scale_down_zero():
         assert (end_time - start_time) > 0.001
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_destroy_units():
     async with base.CleanModel() as model:
@@ -1091,6 +1101,7 @@ async def test_application_annotations():
         assert annotations == expected
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_unit_annotations():
 

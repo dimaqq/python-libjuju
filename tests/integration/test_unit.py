@@ -62,6 +62,7 @@ async def test_unit_public_address():
             assert addr is not None
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_run():
     from juju.action import Action

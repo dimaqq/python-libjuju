@@ -1,0 +1,20 @@
+name: Flakey integration tests
+
+on: workflow_dispatch
+
+jobs:
+  integration:
+    name: Integration
+    timeout-minutes: 150
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: charmed-kubernetes/actions-operator@main
+        with:
+          provider: lxd
+          juju-channel: 3.4/stable
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+      - uses: astral-sh/setup-uv@v3
+      - run: uvx tox -e integration-flakey

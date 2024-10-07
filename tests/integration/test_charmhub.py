@@ -118,6 +118,7 @@ async def test_subordinate_charm_zero_units():
         assert len(app2.units) == 0
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_subordinate_false_field_exists():
     async with base.CleanModel() as model:

@@ -39,6 +39,7 @@ async def test_status():
             timeout=480)
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_machine_ssh():
     async with base.CleanModel() as model:

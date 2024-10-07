@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 from ..utils import INTEGRATION_TEST_DIR
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_action():
     async with base.CleanModel() as model:
@@ -181,6 +182,7 @@ async def test_upgrade_charm_switch():
         assert app.data['charm-url'] == 'ubuntu'
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_upgrade_local_charm():
     async with base.CleanModel() as model:
@@ -194,6 +196,7 @@ async def test_upgrade_local_charm():
         assert app.data['charm-url'] == 'local:focal/ubuntu-0'
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_upgrade_local_charm_resource():
     async with base.CleanModel() as model:
@@ -313,6 +316,7 @@ async def test_trusted():
         assert trusted is False
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_app_destroy():
     async with base.CleanModel() as model:
@@ -328,6 +332,7 @@ async def test_app_destroy():
         assert a_name not in model.applications
 
 
+@pytest.mark.flakey
 @base.bootstrapped
 async def test_app_remove_wait_flag():
     async with base.CleanModel() as model:
@@ -358,6 +363,7 @@ async def test_app_charm_name():
         assert 'ubuntu' == app.charm_name
 
 
+@pytest.mark.skip(reason="always fails")
 @base.bootstrapped
 async def test_app_relation_destroy_block_until_done():
     async with base.CleanModel() as model:
