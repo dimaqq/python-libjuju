@@ -24,7 +24,7 @@ from typing import Any
 import websockets
 import yaml
 
-from . import jasyncio, provisioner, tag, utils
+from . import jasyncio, provisioner, tag, utils, version
 from .annotationhelper import _get_annotations, _set_annotations
 from .bundle import BundleHandler, get_charm_series, is_local_charm
 from .charmhub import CharmHub
@@ -56,7 +56,6 @@ from .placement import parse as parse_placement
 from .secrets import create_secret_data, read_secret_data
 from .tag import application as application_tag
 from .url import URL, Schema
-from .version import DEFAULT_ARCHITECTURE
 
 log = logging.getLogger(__name__)
 
@@ -468,7 +467,7 @@ class LocalDeployType:
         architecture,
         app_name=None,
         channel=None,
-        series=None,
+        series: str | None = None,
         revision=None,
         entity_url=None,
         force=False,
@@ -1731,7 +1730,7 @@ class Model:
         force=False,
         num_units=1,
         overlays=[],
-        base=None,
+        base: str | None = None,
         resources=None,
         series=None,
         revision=None,
@@ -1809,6 +1808,11 @@ class Model:
 
         if schema not in self.deploy_types:
             raise JujuError(f"unknown deploy type {schema}, expected charmhub or local")
+
+        if series and base:
+            derisked = base.split("/")[0]
+            if derisked != version.SERIES_TO_BASE.get(series):
+                raise JujuError(f"Incompatible {series=} and {base=}")
 
         model_conf = await self.get_config()
         res = await self.deploy_types[schema].resolve(
@@ -1966,7 +1970,7 @@ class Model:
         )
 
     async def _resolve_charm(
-        self, url, origin, force=False, series=None, model_config=None
+        self, url, origin, force=False, series: str | None = None, model_config=None
     ):
         """Calls Charms.ResolveCharms to resolve all the fields of the
         charm_origin and also the url and the supported_series
@@ -2011,21 +2015,36 @@ class Model:
         if result.error:
             raise JujuError(f"resolving {url} : {result.error.message}")
 
-        # TODO (cderici) : supported_bases
-        supported_series = result.get(
-            "supported_series", result.unknown_fields["supported-series"]
-        )
         resolved_origin = result.charm_origin
         charm_url = URL.parse(result.url)
 
-        # run the series selector to get a series for the base
-        selected_series = utils.series_selector(
-            series, charm_url, model_config, supported_series, force
-        )
-        result.charm_origin.base = utils.get_base_from_origin_or_channel(
-            resolved_origin, selected_series
-        )
-        charm_url.series = selected_series
+        if "supported-series" in result.unknown_fields:
+            # Legacy code path for Charms v6, that is Juju < 3.3.0
+            supported_series: list[str] = result.unknown_fields["supported-series"]
+            # run the series selector to get a series for the base
+            selected_series = utils.series_selector(
+                series, charm_url, model_config, supported_series, force
+            )
+            result.charm_origin.base = utils.get_base_from_origin_or_channel(
+                resolved_origin, selected_series
+            )
+            charm_url.series = selected_series
+        else:
+            # FIXME use base instead
+            ...
+
+        if series:
+            # FIXME: redo this
+            # Ugh this ugly,
+            # series is valid against Juju 3.0~3.2.x
+            # base is valid against Juju 3.3~4.x
+            # we should convert back and forth really...
+            warnings.warn(
+                "series= argument is deprecated, use base= instead",
+                DeprecationWarning,
+                stacklevel=4,
+            )
+            # FIXME actually use the argument
 
         return charm_url, resolved_origin
 
@@ -2045,7 +2064,7 @@ class Model:
         if "arch" in constraints:
             return constraints["arch"]
 
-        return DEFAULT_ARCHITECTURE
+        return version.DEFAULT_ARCHITECTURE
 
     async def _add_charmhub_resources(
         self, application, entity_url, origin, overrides=None

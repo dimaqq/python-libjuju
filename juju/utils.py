@@ -516,7 +516,11 @@ def user_requested(series_arg, supported_series, force):
 
 
 def series_selector(
-    series_arg="", charm_url=None, model_config=None, supported_series=[], force=False
+    series_arg: str | None = "",
+    charm_url=None,
+    model_config=None,
+    supported_series=[],
+    force=False,
 ):
     """Select series to deploy on.
 
