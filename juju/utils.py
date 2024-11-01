@@ -1,5 +1,6 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
 import os
 import textwrap
@@ -488,7 +489,7 @@ def user_requested(series_arg, supported_series, force):
     return series
 
 
-def series_selector(series_arg='', charm_url=None, model_config=None, supported_series=[], force=False):
+def series_selector(series_arg: str | None = "", charm_url=None, model_config=None, supported_series=[], force=False):
     """
     series_selector corresponds to the CharmSeries() in
     https://github.com/juju/juju/blob/develop/core/charm/series_selector.go

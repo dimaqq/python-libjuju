@@ -1,5 +1,6 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
 import base64
 import collections
@@ -22,7 +23,7 @@ from pathlib import Path
 import yaml
 import websockets
 
-from . import provisioner, tag, utils, jasyncio
+from . import provisioner, tag, utils, jasyncio, version
 from .annotationhelper import _get_annotations, _set_annotations
 from .bundle import BundleHandler, get_charm_series, is_local_charm
 from .charmhub import CharmHub
@@ -42,7 +43,6 @@ from .placement import parse as parse_placement
 from .secrets import create_secret_data, read_secret_data
 from .tag import application as application_tag
 from .url import URL, Schema
-from .version import DEFAULT_ARCHITECTURE
 
 log = logging.getLogger(__name__)
 
@@ -452,7 +452,7 @@ class LocalDeployType:
     """
 
     async def resolve(self, charm_path, architecture,
-                      app_name=None, channel=None, series=None,
+                      app_name=None, channel=None, series: str | None = None,
                       revision=None, entity_url=None, force=False,
                       model_conf=None):
         """resolve attempts to resolve a local charm or bundle using the url
@@ -1668,7 +1668,8 @@ class Model:
     async def deploy(
             self, entity_url, application_name=None, bind=None,
             channel=None, config=None, constraints=None, force=False,
-            num_units=1, overlays=[], base=None, resources=None, series=None, revision=None,
+            num_units=1, overlays=[], base: str | None = None,
+            resources=None, series=None, revision=None,
             storage=None, to=None, devices=None, trust=False, attach_storage=[]):
         """Deploy a new service or bundle.
 
@@ -1738,6 +1739,11 @@ class Model:
 
         if schema not in self.deploy_types:
             raise JujuError("unknown deploy type {}, expected charmhub or local".format(schema))
+
+        if series and base:
+            derisked = base.split("/")[0]
+            if derisked != version.SERIES_TO_BASE.get(series):
+                raise JujuError(f"Incompatible {series=} and {base=}")
 
         model_conf = await self.get_config()
         res = await self.deploy_types[schema].resolve(entity, architecture,
@@ -1876,7 +1882,7 @@ class Model:
         client_facade = client.ClientFacade.from_connection(self.connection())
         return await client_facade.AddCharm(channel=str(origin.risk), url=charm_url, force=False)
 
-    async def _resolve_charm(self, url, origin, force=False, series=None, model_config=None):
+    async def _resolve_charm(self, url, origin, force=False, series: str | None = None, model_config=None):
         """Calls Charms.ResolveCharms to resolve all the fields of the
         charm_origin and also the url and the supported_series
 
@@ -1917,15 +1923,23 @@ class Model:
         if result.error:
             raise JujuError(f'resolving {url} : {result.error.message}')
 
-        # TODO (cderici) : supported_bases
-        supported_series = result.get('supported_series', result.unknown_fields['supported-series'])
         resolved_origin = result.charm_origin
         charm_url = URL.parse(result.url)
+        if "supported-series" in result.unknown_fields:
+            # Legacy code path for Charms v6, that is Juju < 3.3.0
+            supported_series: list[str] = result.unknown_fields['supported-series']
+            # run the series selector to get a series for the base
+            selected_series = utils.series_selector(series, charm_url, model_config, supported_series, force)
+            result.charm_origin.base = utils.get_base_from_origin_or_channel(resolved_origin, selected_series)
+            charm_url.series = selected_series
 
-        # run the series selector to get a series for the base
-        selected_series = utils.series_selector(series, charm_url, model_config, supported_series, force)
-        result.charm_origin.base = utils.get_base_from_origin_or_channel(resolved_origin, selected_series)
-        charm_url.series = selected_series
+        if series:
+            # Ugh this ugly,
+            # series is valid against Juju 3.0~3.2.x
+            # base is valid against Juju 3.3~4.x
+            # we should convert back and forth really...
+            warnings.warn("series= argument is deprecated, use base= instead", DeprecationWarning, stacklevel=4)
+            # FIXME actually use the argument
 
         return charm_url, resolved_origin
 
@@ -1945,7 +1959,7 @@ class Model:
         if 'arch' in constraints:
             return constraints['arch']
 
-        return DEFAULT_ARCHITECTURE
+        return version.DEFAULT_ARCHITECTURE
 
     async def _add_charmhub_resources(self, application,
                                       entity_url,

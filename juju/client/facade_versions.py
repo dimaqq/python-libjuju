@@ -17,7 +17,7 @@ client_facade_versions = {
     'Backups': (3, ),
     'Block': (2, ),
     'Bundle': (6, ),
-    'Charms': (6, ),
+    'Charms': (6, 7),
     'Client': (6, 7, 8),
     'Cloud': (7, ),
     'Controller': (11, 12),
