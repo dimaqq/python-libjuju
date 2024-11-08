@@ -46,7 +46,6 @@ client_facade_versions = {
 
 # Manual list of facades present in schemas + codegen which python-libjuju does not yet support
 excluded_facade_versions: Dict[str, Sequence[int]] = {
-    'Charms': (7, )
 }
 
 
