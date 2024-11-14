@@ -36,3 +36,5 @@ repos:
       additional_dependencies:
         - tomli
       exclude: "^juju/client/schemas-juju.*json$"
+ci:
+  autofix_prs: false
