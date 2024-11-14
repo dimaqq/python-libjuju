@@ -1,8 +1,10 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
 import copy
 import logging
+from typing import Any
 
 import macaroonbakery.httpbakery as httpbakery
 from packaging import version
@@ -33,9 +35,9 @@ class Connector:
 
     def __init__(
         self,
-        max_frame_size=None,
-        bakery_client=None,
-        jujudata=None,
+        max_frame_size: int | None = None,
+        bakery_client: Any | None = None,
+        jujudata: Any | None = None,
     ):
         """Initialize a connector that will use the given parameters
         by default when making a new connection
@@ -52,7 +54,7 @@ class Connector:
         """Report whether there is a currently connected controller or not"""
         return self._connection is not None
 
-    def connection(self):
+    def connection(self) -> Connection:
         """Return the current connection; raises an exception if there
         is no current connection.
         """
