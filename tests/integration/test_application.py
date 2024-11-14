@@ -22,11 +22,11 @@ logger = logging.getLogger(__name__)
 
 @base.bootstrapped
 async def test_action():
-    async with base.CleanModel() as model:
-        app = await model.deploy("juju-qa-test")
-        await jasyncio.sleep(10)
-        actions = await app.get_actions(schema=True)
-        assert "fortune" in actions
+        async with base.CleanModel() as model:
+                app = await model.deploy("juju-qa-test")
+                await jasyncio.sleep(10)
+                actions = await app.get_actions(schema=True)
+                assert "fortune" in actions
 
 
 @base.bootstrapped
