@@ -483,7 +483,7 @@ def series_for_charm(requested_series, supported_series):
 
     # use the charm default
     if requested_series == "":
-        return supported_series[-1]
+        return supported_series[0]
 
     for s in supported_series:
         if requested_series == s:
