@@ -121,6 +121,7 @@ class Connection:
     _retries: int
     _retry_backoff: float
     uuid: str | None
+    messages: IdQueue
 
     @classmethod
     async def connect(
@@ -373,7 +374,7 @@ class Connection:
         if self.proxy is not None:
             self.proxy.close()
 
-    async def _recv(self, request_id):
+    async def _recv(self, request_id: int) -> dict[str, Any]:
         if not self.is_open:
             raise websockets.exceptions.ConnectionClosed(
                 websockets.frames.Close(

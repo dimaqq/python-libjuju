@@ -1,13 +1,15 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import textwrap
 import zipfile
 from collections import defaultdict
-from functools import partial
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pyasn1.codec.der.encoder import encode
@@ -20,11 +22,11 @@ from .errors import JujuError
 
 async def execute_process(*cmd, log=None):
     """Wrapper around asyncio.create_subprocess_exec."""
-    p = await jasyncio.create_subprocess_exec(
+    p = await asyncio.create_subprocess_exec(
         *cmd,
-        stdin=jasyncio.subprocess.PIPE,
-        stdout=jasyncio.subprocess.PIPE,
-        stderr=jasyncio.subprocess.PIPE,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await p.communicate()
     if log:
@@ -84,7 +86,7 @@ async def read_ssh_key():
     """Attempt to read the local juju admin's public ssh key, so that it can be
     passed on to a model.
     """
-    loop = jasyncio.get_running_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _read_ssh_key)
 
 
@@ -93,20 +95,31 @@ class IdQueue:
     ID.
     """
 
-    def __init__(self, maxsize=0):
-        self._queues = defaultdict(partial(jasyncio.Queue, maxsize))
+    _queues: dict[int, asyncio.Queue[dict[str, Any] | Exception]]
 
-    async def get(self, id_):
+    def __init__(self):
+        self._queues = defaultdict(asyncio.Queue)
+        # FIXME cleanup needed.
+        # in some cases an Exception is put into the queue.
+        # if the main coro exits, this exception will be logged as "never awaited"
+        # we gotta do something about that to keep the output clean.
+        #
+        # Additionally, it's conceivable that a response is put in the queue
+        # and then an exception is put via put_all()
+        # the reader only ever fetches one item, and exception is "never awaited"
+        # rewrite put_all to replace the pending response instead.
+
+    async def get(self, id_: int) -> dict[str, Any]:
         value = await self._queues[id_].get()
         del self._queues[id_]
         if isinstance(value, Exception):
             raise value
         return value
 
-    async def put(self, id_, value):
+    async def put(self, id_: int, value: dict[str, Any]):
         await self._queues[id_].put(value)
 
-    async def put_all(self, value):
+    async def put_all(self, value: Exception):
         for queue in self._queues.values():
             await queue.put(value)
 
@@ -120,9 +133,9 @@ async def block_until(*conditions, timeout=None, wait_period=0.5):
 
     async def _block():
         while not all(c() for c in conditions):
-            await jasyncio.sleep(wait_period)
+            await asyncio.sleep(wait_period)
 
-    await jasyncio.shield(jasyncio.wait_for(_block(), timeout))
+    await asyncio.shield(asyncio.wait_for(_block(), timeout))
 
 
 async def block_until_with_coroutine(
@@ -136,12 +149,12 @@ async def block_until_with_coroutine(
 
     async def _block():
         while not await condition_coroutine():
-            await jasyncio.sleep(wait_period)
+            await asyncio.sleep(wait_period)
 
-    await jasyncio.shield(jasyncio.wait_for(_block(), timeout=timeout))
+    await asyncio.shield(asyncio.wait_for(_block(), timeout=timeout))
 
 
-async def wait_for_bundle(model, bundle, **kwargs):
+async def wait_for_bundle(model, bundle: str | Path, **kwargs) -> None:
     """Helper to wait for just the apps in a specific bundle.
 
     Equivalent to loading the bundle, pulling out the app names, and calling::
@@ -156,8 +169,8 @@ async def wait_for_bundle(model, bundle, **kwargs):
             bundle = bundle_path / "bundle.yaml"
     except OSError:
         pass
-    bundle = yaml.safe_load(textwrap.dedent(bundle).strip())
-    apps = list(bundle.get("applications", bundle.get("services")).keys())
+    content: dict[str, Any] = yaml.safe_load(textwrap.dedent(bundle).strip())
+    apps = list(content.get("applications", content.get("services")).keys())
     await model.wait_for_idle(apps, **kwargs)
 
 

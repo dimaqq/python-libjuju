@@ -21,6 +21,7 @@ from asyncio import (
 )
 from asyncio import (
     CancelledError,
+    Task,
     create_task,
     wait,
 )
@@ -84,7 +85,7 @@ import websockets
 ROOT_LOGGER = logging.getLogger()
 
 
-def create_task_with_handler(coro, task_name, logger=ROOT_LOGGER):
+def create_task_with_handler(coro, task_name, logger=ROOT_LOGGER) -> Task:
     """Wrapper around "asyncio.create_task" to make sure the task
     exceptions are handled properly.
 

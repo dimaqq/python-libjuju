@@ -2917,7 +2917,7 @@ class Model:
 
     async def wait_for_idle(
         self,
-        apps=None,
+        apps: list[str] | None = None,
         raise_on_error=True,
         raise_on_blocked=False,
         wait_for_active=False,
@@ -2927,7 +2927,7 @@ class Model:
         status=None,
         wait_for_at_least_units=None,
         wait_for_exact_units=None,
-    ):
+    ) -> None:
         """Wait for applications in the model to settle into an idle state.
 
         :param List[str] apps: Optional list of specific app names to wait on.
