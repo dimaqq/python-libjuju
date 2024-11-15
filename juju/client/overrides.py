@@ -1,8 +1,9 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
 import re
-from collections import namedtuple
+from typing import Any, NamedTuple
 
 from . import _client, _definitions
 from .facade import ReturnMapping, Type, TypeEncoder
@@ -20,6 +21,12 @@ __patches__ = [
     "AllWatcherFacade",
     "ActionFacade",
 ]
+
+
+class _Change(NamedTuple):
+    entity: str
+    type: str
+    data: dict[str, Any]
 
 
 class Delta(Type):
@@ -42,12 +49,11 @@ class Delta(Type):
     _toSchema = {"deltas": "deltas"}
     _toPy = {"deltas": "deltas"}
 
-    def __init__(self, deltas=None):
+    def __init__(self, deltas: tuple[str, str, dict[str, Any]]):
         """:param deltas: [str, str, object]"""
         self.deltas = deltas
 
-        Change = namedtuple("Change", "entity type data")
-        change = Change(*self.deltas)
+        change = _Change(*self.deltas)
 
         self.entity = change.entity
         self.type = change.type

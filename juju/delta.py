@@ -1,10 +1,12 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
-from .client import client
+from . import model
+from .client import client, overrides
 
 
-def get_entity_delta(d):
+def get_entity_delta(d: overrides.Delta):
     return _delta_types[d.entity](d.deltas)
 
 
@@ -13,12 +15,14 @@ def get_entity_class(entity_type):
 
 
 class EntityDelta(client.Delta):
-    def get_id(self):
+    data: dict[str, str]
+
+    def get_id(self) -> str:
         return self.data["id"]
 
     @classmethod
-    def get_entity_class(cls):
-        return None
+    def get_entity_class(cls) -> type[model.ModelEntity]:
+        raise NotImplementedError()
 
 
 class ActionDelta(EntityDelta):
