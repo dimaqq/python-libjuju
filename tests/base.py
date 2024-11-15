@@ -52,13 +52,12 @@ class CleanController:
             "juju debug-log --replay --no-tail",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            text=True,
         )
 
         try:
             assert process.stdout
             async for line in process.stdout:
-                logging.warning(line.strip())
+                logging.warning("%s", line.decode("utf-8").strip())
         except asyncio.CancelledError:
             logging.warning("FIXME FIXME FIXME, got killed")
             process.terminate()
