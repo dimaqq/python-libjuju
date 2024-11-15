@@ -288,6 +288,11 @@ async def test_refresh_charmhub_to_local():
 @base.bootstrapped
 @pytest.mark.asyncio
 async def test_local_refresh():
+    # FIXME: temp
+    import logging
+
+    logging.getLogger("juju.client.connection").setLevel("DEBUG")
+    #
     charm_path = INTEGRATION_TEST_DIR / "charm"
     async with base.CleanModel() as model:
         app = await model.deploy(
