@@ -45,6 +45,27 @@ class CleanController:
         return self._controller
 
     async def __aexit__(self, exc_type, exc, tb):
+        import asyncio
+        import logging
+
+        process = await asyncio.create_subprocess_shell(
+            "juju debug-log --replay --no-tail",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            text=True,
+        )
+
+        try:
+            assert process.stdout
+            async for line in process.stdout:
+                logging.warning(line.strip())
+        except asyncio.CancelledError:
+            logging.warning("FIXME FIXME FIXME, got killed")
+            process.terminate()
+            raise
+        finally:
+            await process.wait()
+
         await self._controller.disconnect()
 
 
