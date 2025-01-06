@@ -23,17 +23,28 @@ from concurrent.futures import CancelledError
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Coroutine,
+    Iterable,
+    Literal,
+    Mapping,
+    TypeVar,
+    overload,
+)
 
 import websockets
 import yaml
 from typing_extensions import deprecated
 
 from .. import provisioner, tag, utils
+from .._sync import SyncCacheLine as SyncCacheLine
+from .._sync import ThreadedAsyncRunner
 from ..annotationhelper import _get_annotations, _set_annotations
 from ..bundle import BundleHandler, get_charm_series, is_local_charm
 from ..charmhub import CharmHub
-from ..client import client, connection, connector
+from ..client import client, connection, connector, protocols
 from ..client._definitions import ApplicationStatus as ApplicationStatus
 from ..client._definitions import MachineStatus as MachineStatus
 from ..client._definitions import UnitStatus as UnitStatus
@@ -75,6 +86,8 @@ if TYPE_CHECKING:
     from ..relation import Relation
     from ..remoteapplication import ApplicationOffer, RemoteApplication
     from ..unit import Unit
+
+R = TypeVar("R")
 
 log = logger = logging.getLogger(__name__)
 
@@ -645,6 +658,7 @@ class Model:
 
     connector: connector.Connector
     state: ModelState
+    _sync: ThreadedAsyncRunner | None = None
 
     def __init__(
         self,
@@ -685,6 +699,28 @@ class Model:
             Schema.LOCAL: LocalDeployType(),
             Schema.CHARM_HUB: CharmhubDeployType(self._resolve_charm),
         }
+
+    def _sync_call(self, coro: Coroutine[None, None, R]) -> R:
+        assert self._sync
+        return self._sync.call(coro)
+
+    @property
+    def _sync_application_facade(self) -> protocols.ApplicationFacadeProtocol:
+        """An ApplicationFacade suitable for ._sync.call(...)"""
+        assert self._sync
+        return client.ApplicationFacade.from_connection(self._sync.connection)
+
+    @property
+    def _sync_charms_facade(self) -> protocols.CharmsFacadeProtocol:
+        assert self._sync
+        return client.CharmsFacade.from_connection(self._sync.connection)
+
+    # FIXME uniter facade is gone now... I hope it was not needed
+    # @property
+    # def _sync_uniter_facade(self) -> protocols.UniterFacadeProtocol:
+    #     """A UniterFacade suitable for ._sync.call(...)"""
+    #     assert self._sync
+    #     return client.UniterFacade.from_connection(self._sync.connection)
 
     def is_connected(self):
         """Reports whether the Model is currently connected."""
@@ -808,6 +844,10 @@ class Model:
             await self._connector.connect(**kwargs)
         if not is_debug_log_conn:
             await self._after_connect(model_name, model_uuid)
+
+        self._sync = ThreadedAsyncRunner.new_connected(
+            connection_kwargs=self._connector._kwargs_cache
+        )
 
     async def connect_model(self, model_name, **kwargs):
         """.. deprecated:: 0.6.2
