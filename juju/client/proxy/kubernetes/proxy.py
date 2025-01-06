@@ -37,8 +37,12 @@ class KubernetesProxy(Proxy):
 
         self.port_forwarder = None
 
+        import threading
+
+        print("open", threading.current_thread(), "ca", (ca_cert or "x")[:10])
+
         if ca_cert:
-            self.temp_ca_file = tempfile.NamedTemporaryFile()  # noqa: SIM115
+            self.temp_ca_file = tempfile.NamedTemporaryFile(delete=True)  # noqa: SIM115
             self.temp_ca_file.write(bytes(ca_cert, "utf-8"))
             self.temp_ca_file.flush()
             config.ssl_ca_cert = self.temp_ca_file.name
@@ -68,12 +72,14 @@ class KubernetesProxy(Proxy):
     def __del__(self):
         self.close()
 
+    # FIXME implement if the default (object sharing) is not good enough
+    # basically, if `.close()` does anything, gotta copy explicitly
+    # def __deepcopy__(self, memo): ...
+
     def close(self):
         try:
             if self.port_forwarder:
                 self.port_forwarder.close()
-            if self.temp_ca_file:
-                self.temp_ca_file.close()
         except AttributeError:
             pass
 

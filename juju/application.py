@@ -9,11 +9,18 @@ import logging
 from pathlib import Path
 
 from typing_extensions import deprecated
+from typing_extensions import reveal_type as reveal_type  # FIXME temp
 
 from . import model, tag, utils
+from ._sync import cache_until_await
 from .annotationhelper import _get_annotations, _set_annotations
 from .bundle import get_charm_series, is_local_charm
 from .client import _definitions, client
+from .client._definitions import (
+    ApplicationGetResults,
+    ApplicationResult,
+    Value,
+)
 from .errors import JujuApplicationConfigError, JujuError
 from .origin import Channel
 from .placement import parse as parse_placement
@@ -44,7 +51,9 @@ class Application(model.ModelEntity):
 
     @property
     def exposed(self) -> bool:
-        return self.safe_data["exposed"]
+        rv = self._application_info().exposed
+        assert rv is not None
+        return rv
 
     @property
     @deprecated("Application.owner_tag is deprecated and will be removed in v4")
@@ -60,9 +69,22 @@ class Application(model.ModelEntity):
     def min_units(self) -> int:
         return self.safe_data["min-units"]
 
+    # Well, this attribute is lovely:
+    # - not used in integration tests, as far as I can see
+    # - not used in zaza*tests
+    # - not used in openstack upgrader
+    # - no unit tests in this repo
+    # - no integration tests in this repo
+    # Why was it here in the first place?
+    # @property
+    # def constraints(self) -> dict[str, str | int | bool]:
+    #     return FIXME_to_dict(self.constraints_object)
+
     @property
-    def constraints(self) -> dict[str, str | int | bool]:
-        return self.safe_data["constraints"]
+    def constraints_object(self) -> Value:
+        rv = self._application_get().constraints
+        assert isinstance(rv, Value)  # FIXME #1249
+        return rv
 
     @property
     @deprecated("Application.subordinate is deprecated and will be removed in v4")
@@ -75,6 +97,28 @@ class Application(model.ModelEntity):
     )
     def workload_version(self) -> str:
         return self.safe_data["workload-version"]
+
+    @cache_until_await
+    def _application_get(self) -> ApplicationGetResults:
+        return self.model._sync_call(
+            self.model._sync_application_facade.Get(
+                application=self.name,
+            )
+        )
+
+    @cache_until_await
+    def _application_info(self) -> ApplicationResult:
+        first = self.model._sync_call(
+            self.model._sync_application_facade.ApplicationsInfo(
+                entities=[client.Entity(self.tag)],
+            )
+        ).results[0]
+        # This API can get a bunch of results for a bunch of entities, or "tags"
+        # For each, either .result or .error is set by Juju, and an exception is
+        # raised on any .error by juju.client.connection.Connection.rpc()
+        assert first
+        assert first.result
+        return first.result
 
     @property
     def _unit_match_pattern(self):
@@ -643,7 +687,9 @@ class Application(model.ModelEntity):
 
         :return str: The name of the charm
         """
-        return URL.parse(self.safe_data["charm-url"]).name
+        rv = self._application_get().charm
+        assert isinstance(rv, str)  # FIXME #1249
+        return rv
 
     @property
     @deprecated("Application.charm_url is deprecated and will be removed in v4")

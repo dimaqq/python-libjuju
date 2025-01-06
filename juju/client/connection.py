@@ -324,6 +324,7 @@ class Connection:
         # not be covering the proxy
         sock = None
         server_hostname = None
+        # __import__("pdb").set_trace()
         if self.proxy is not None:
             sock = self.proxy.socket()
             server_hostname = "juju-app"
@@ -376,7 +377,10 @@ class Connection:
         self._debug_log_task = None
 
         if self.proxy is not None:
-            self.proxy.close()
+            # FIXME if explicit .close() is needed, explicit duplication is needed too.
+            # FIXME test this change
+            # self.proxy.close()
+            self.proxy = None
 
     async def _recv(self, request_id: int) -> dict[str, Any]:
         if not self.is_open:
@@ -563,8 +567,8 @@ class Connection:
             msg["params"] = {}
         if "version" not in msg:
             msg["version"] = self.facades[msg["type"]]
-        outgoing = json.dumps(msg, indent=2, cls=encoder)
-        log.debug(f"connection id: {id(self)} ---> {outgoing}")
+        outgoing = json.dumps(msg, cls=encoder)
+        log.debug(f"connection: {id(self)} ➡️ {outgoing}")
         for attempt in range(3):
             if self.monitor.status == Monitor.DISCONNECTED:
                 # closed cleanly; shouldn't try to reconnect
@@ -587,7 +591,7 @@ class Connection:
                     log.error("RPC: Automatic reconnect failed")
                     raise
         result = await self._recv(msg["request-id"])
-        log.debug(f"connection id : {id(self)} <--- {result}")
+        log.debug(f"connection: {id(self)} ⬅️ {result}")
 
         if not result:
             return result

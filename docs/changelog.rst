@@ -1,6 +1,15 @@
 Changelog
 ---------
 
+4.0.0
+^^^^^
+
+Someday 2025
+
+## What's new
+* support for Juju 4.0
+* new wait_for_idle() implementation (previously under feature flag, now always on)
+
 3.6.1.1
 ^^^^^^^
 

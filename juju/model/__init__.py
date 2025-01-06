@@ -20,35 +20,38 @@ import warnings
 import weakref
 import zipfile
 from concurrent.futures import CancelledError
-from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Coroutine,
+    Iterable,
+    Literal,
+    Mapping,
+    TypeVar,
+    overload,
+)
 
 import websockets
 import yaml
 from typing_extensions import deprecated
 
 from .. import provisioner, tag, utils
+from .._sync import SyncCacheLine, ThreadedAsyncRunner, cache_until_await
 from ..annotationhelper import _get_annotations, _set_annotations
 from ..bundle import BundleHandler, get_charm_series, is_local_charm
 from ..charmhub import CharmHub
-from ..client import client, connection, connector
-from ..client._definitions import ApplicationStatus as ApplicationStatus
-from ..client._definitions import MachineStatus as MachineStatus
-from ..client._definitions import UnitStatus as UnitStatus
+from ..client import client, connection, connector, protocols
 from ..client.overrides import Caveat, Macaroon
 from ..constraints import parse as parse_constraints
 from ..constraints import parse_storage_constraints
 from ..controller import ConnectedController, Controller
 from ..delta import get_entity_class, get_entity_delta
 from ..errors import (
-    JujuAgentError,
     JujuAPIError,
-    JujuAppError,
     JujuBackupError,
     JujuError,
-    JujuMachineError,
     JujuModelConfigError,
     JujuModelError,
     JujuNotSupportedError,
@@ -76,16 +79,9 @@ if TYPE_CHECKING:
     from ..remoteapplication import ApplicationOffer, RemoteApplication
     from ..unit import Unit
 
+R = TypeVar("R")
+
 log = logger = logging.getLogger(__name__)
-
-
-def use_new_wait_for_idle() -> bool:
-    val = os.getenv("JUJU_NEW_WAIT_FOR_IDLE")
-    if not val:
-        return False
-    if val.isdigit():
-        return bool(int(val))
-    return val.title() != "False"
 
 
 class _Observer:
@@ -322,6 +318,11 @@ class ModelEntity:
     connected: bool
     connection: connection.Connection
     _status: str
+    # FIXME maybe refactor and set this dynamically in juju/_sync.py?
+    # for now, it's convenient for:
+    # - debugging during development
+    # - cleanup if we ever need that
+    _sync_cache: dict[str, SyncCacheLine]
 
     def __init__(
         self,
@@ -347,6 +348,7 @@ class ModelEntity:
         self.connected = connected
         self.connection = model.connection()
         self._status = "unknown"
+        self._sync_cache = {}
 
     def __repr__(self):
         return f'<{type(self).__name__} entity_id="{self.entity_id}">'
@@ -645,6 +647,8 @@ class Model:
 
     connector: connector.Connector
     state: ModelState
+    _sync: ThreadedAsyncRunner | None = None
+    _sync_cache: dict[str, SyncCacheLine]
 
     def __init__(
         self,
@@ -678,6 +682,7 @@ class Model:
         self._watch_stopped = asyncio.Event()
         self._watch_received = asyncio.Event()
         self._watch_stopped.set()
+        self._sync_cache = {}
 
         self._charmhub = CharmHub(self)
 
@@ -685,6 +690,28 @@ class Model:
             Schema.LOCAL: LocalDeployType(),
             Schema.CHARM_HUB: CharmhubDeployType(self._resolve_charm),
         }
+
+    def _sync_call(self, coro: Coroutine[None, None, R]) -> R:
+        assert self._sync
+        return self._sync.call(coro)
+
+    @property
+    def _sync_application_facade(self) -> protocols.ApplicationFacadeProtocol:
+        """An ApplicationFacade suitable for ._sync.call(...)"""
+        assert self._sync
+        return client.ApplicationFacade.from_connection(self._sync.connection)
+
+    @property
+    def _sync_charms_facade(self) -> protocols.CharmsFacadeProtocol:
+        assert self._sync
+        return client.CharmsFacade.from_connection(self._sync.connection)
+
+    # FIXME uniter facade is gone now... I hope it was not needed
+    # @property
+    # def _sync_uniter_facade(self) -> protocols.UniterFacadeProtocol:
+    #     """A UniterFacade suitable for ._sync.call(...)"""
+    #     assert self._sync
+    #     return client.UniterFacade.from_connection(self._sync.connection)
 
     def is_connected(self):
         """Reports whether the Model is currently connected."""
@@ -809,6 +836,10 @@ class Model:
         if not is_debug_log_conn:
             await self._after_connect(model_name, model_uuid)
 
+        self._sync = ThreadedAsyncRunner.new_connected(
+            connection_kwargs=self._connector._kwargs_cache
+        )
+
     async def connect_model(self, model_name, **kwargs):
         """.. deprecated:: 0.6.2
         Use ``connect(model_name=model_name)`` instead.
@@ -884,6 +915,10 @@ class Model:
 
     async def disconnect(self):
         """Shut down the watcher task and close websockets."""
+        if self._sync:
+            self._sync.stop()
+            self._sync = None
+
         if not self._watch_stopped.is_set():
             log.debug("Stopping watcher task")
             self._watch_stopping.set()
@@ -1212,8 +1247,12 @@ class Model:
         the model.
 
         """
+        # FIXME: we'll create Unit instances on the fly here
         return self.state.units
 
+    # FIXME this attribute doesn't appear to be used,
+    # check library users carefully
+    # at least zaza uses app.subordinate_units, maybe not model.subordinate_units?
     @property
     def subordinate_units(self) -> dict[str, Unit]:
         """Return a map of unit-id:Unit for all subordiante units currently in
@@ -1748,6 +1787,7 @@ class Model:
 
         return file_name, backup_metadata
 
+    @deprecated("Model.debug_log is deprecated and will be removed in v4")
     async def debug_log(
         self,
         target=sys.stdout,
@@ -2680,6 +2720,16 @@ class Model:
             results[tag.untag("action-", a.action.tag)] = a.status
         return results
 
+    @cache_until_await
+    def _full_status(self) -> FullStatus:
+        return self._sync_call(self._sync_client_facade.FullStatus())
+
+    @property
+    def _sync_client_facade(self) -> protocols.ClientFacadeProtocol:
+        """A ClientFacadeProtocol suitable for ._sync_call(...)"""
+        assert self._sync
+        return client.ClientFacade.from_connection(self._sync.connection)
+
     async def get_status(self, filters=None, utc: bool = False) -> FullStatus:
         """Return the status of the model.
 
@@ -3077,201 +3127,6 @@ class Model:
             going into the idle state. (e.g. useful for scaling down).
             When set, takes precedence over the `wait_for_units` parameter.
         """
-        if use_new_wait_for_idle():
-            await self.new_wait_for_idle(
-                apps=apps,
-                raise_on_error=raise_on_error,
-                raise_on_blocked=raise_on_blocked,
-                wait_for_active=wait_for_active,
-                timeout=timeout,
-                idle_period=idle_period,
-                check_freq=check_freq,
-                status=status,
-                wait_for_at_least_units=wait_for_at_least_units,
-                wait_for_exact_units=wait_for_exact_units,
-            )
-            return
-
-        if wait_for_active:
-            warnings.warn(
-                "wait_for_active is deprecated; use status",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            status = "active"
-
-        _wait_for_units = (
-            wait_for_at_least_units if wait_for_at_least_units is not None else 1
-        )
-
-        timeout_ = timedelta(seconds=timeout) if timeout is not None else None
-        idle_period_ = timedelta(seconds=idle_period)
-        start_time = datetime.now()
-
-        if isinstance(apps, (str, bytes, bytearray, memoryview)):
-            raise TypeError(f"apps must be a Iterable[str], got {apps=}")
-
-        apps_ = list(apps or self.applications)
-
-        if any(not isinstance(o, str) for o in apps_):
-            raise TypeError(f"apps must be a Iterable[str], got {apps_=}")
-
-        idle_times: dict[str, datetime] = {}
-        units_ready: set[str] = set()  # The units that are in the desired state
-        last_log_time: datetime | None = None
-        log_interval = timedelta(seconds=30)
-
-        def _raise_for_status(entities: dict[str, list[str]], status: Any):
-            if not entities:
-                return
-            for entity_name, error_type in (
-                ("Machine", JujuMachineError),
-                ("Agent", JujuAgentError),
-                ("Unit", JujuUnitError),
-                ("App", JujuAppError),
-            ):
-                errored = entities.get(entity_name, [])
-                if not errored:
-                    continue
-                raise error_type(
-                    "{}{} in {}: {}".format(
-                        entity_name,
-                        "s" if len(errored) > 1 else "",
-                        status,
-                        ", ".join(errored),
-                    )
-                )
-
-        if wait_for_exact_units is not None:
-            assert (
-                isinstance(wait_for_exact_units, int) and wait_for_exact_units >= 0
-            ), "Invalid value for wait_for_exact_units : %s" % wait_for_exact_units
-
-        while True:
-            # The list 'busy' is what keeps this loop going,
-            # i.e. it'll stop when busy is empty after all the
-            # units are scanned
-            busy: list[str] = []
-            errors: dict[str, list[str]] = {}
-            blocks: dict[str, list[str]] = {}
-            for app_name in apps_:
-                if app_name not in self.applications:
-                    busy.append(app_name + " (missing)")
-                    continue
-                app = self.applications[app_name]
-                app_status = await app.get_status()
-                if raise_on_error and app_status == "error":
-                    errors.setdefault("App", []).append(app.name)
-                if raise_on_blocked and app_status == "blocked":
-                    blocks.setdefault("App", []).append(app.name)
-
-                # Check if wait_for_exact_units flag is used
-                if wait_for_exact_units is not None:
-                    if len(app.units) != wait_for_exact_units:
-                        busy.append(
-                            app.name
-                            + " (waiting for exactly %s units, current : %s)"
-                            % (wait_for_exact_units, len(app.units))
-                        )
-                        continue
-                # If we have less # of units then required, then wait a bit more
-                elif len(app.units) < _wait_for_units:
-                    busy.append(
-                        app.name
-                        + " (not enough units yet - %s/%s)"
-                        % (len(app.units), _wait_for_units)
-                    )
-                    continue
-                # User is waiting for at least a certain # of units, and we have enough
-                elif wait_for_at_least_units and len(units_ready) >= _wait_for_units:
-                    # So no need to keep looking, we have the desired number of units ready to go,
-                    # exit the loop. Don't just return here, though, we might still have some
-                    # errors to raise at the end
-                    break
-                for unit in app.units:
-                    if (
-                        raise_on_error
-                        and unit.machine is not None
-                        and unit.machine.status == "error"
-                    ):
-                        errors.setdefault("Machine", []).append(unit.machine.id)
-                        continue
-                    if raise_on_error and unit.agent_status == "error":
-                        errors.setdefault("Agent", []).append(unit.name)
-                        continue
-                    if raise_on_error and unit.workload_status == "error":
-                        errors.setdefault("Unit", []).append(unit.name)
-                        continue
-                    if raise_on_blocked and unit.workload_status == "blocked":
-                        blocks.setdefault("Unit", []).append(unit.name)
-                        continue
-                    # TODO (cderici): we need two versions of wait_for_idle, one for waiting on
-                    #  individual units, another one for waiting for an application.
-                    #  The convoluted logic below is the result of trying to do both at the same
-                    #  time
-                    need_to_wait_more_for_a_particular_status = status and (
-                        unit.workload_status != status
-                    )
-                    app_is_in_desired_status = (not status) or (app_status == status)
-                    if (
-                        not need_to_wait_more_for_a_particular_status
-                        and unit.agent_status == "idle"
-                        and (wait_for_at_least_units or app_is_in_desired_status)
-                    ):
-                        # A unit is ready if either:
-                        # 1) Don't need to wait more for a particular status and the agent is "idle"
-                        # 2) We're looking for a particular status and the unit's workload,
-                        # as well as the application, is in that status. If the user wants to
-                        # see only a particular number of units in that state -- i.e. a subset of
-                        # the units is needed, then we don't care about the application status
-                        # (because e.g. app can be in 'waiting' while unit.0 is 'active' and unit.1
-                        # is 'waiting')
-
-                        # Either way, the unit is ready, start measuring the time period that
-                        # it needs to stay in that state (i.e. idle_period)
-                        units_ready.add(unit.name)
-                        now = datetime.now()
-                        idle_start = idle_times.setdefault(unit.name, now)
-
-                        if now - idle_start < idle_period_:
-                            busy.append(
-                                f"{unit.name} [{unit.agent_status}] {unit.workload_status}: {unit.workload_status_message}"
-                            )
-                    else:
-                        idle_times.pop(unit.name, None)
-                        busy.append(
-                            f"{unit.name} [{unit.agent_status}] {unit.workload_status}: {unit.workload_status_message}"
-                        )
-            _raise_for_status(errors, "error")
-            _raise_for_status(blocks, "blocked")
-            if not busy:
-                break
-            if timeout_ is not None and datetime.now() - start_time > timeout_:
-                raise asyncio.TimeoutError(
-                    "\n  ".join(["Timed out waiting for model:", *busy])
-                )
-            if last_log_time is None or datetime.now() - last_log_time > log_interval:
-                log.info("\n  ".join(["Waiting for model:", *busy]))
-                last_log_time = datetime.now()
-            await asyncio.sleep(check_freq)
-
-    async def new_wait_for_idle(
-        self,
-        apps: Iterable[str] | None = None,
-        raise_on_error: bool = True,
-        raise_on_blocked: bool = False,
-        wait_for_active: bool = False,
-        timeout: float | None = 10 * 60,
-        idle_period: float = 15,
-        check_freq: float = 0.5,
-        status: str | None = None,
-        wait_for_at_least_units: int | None = None,
-        wait_for_exact_units: int | None = None,
-    ) -> None:
-        """Wait for applications in the model to settle into an idle state.
-
-        arguments match those of .wait_for_idle exactly.
-        """
         if not isinstance(wait_for_exact_units, (int, type(None))):
             raise ValueError(f"Must be an int or None, got {wait_for_exact_units=}")
 
@@ -3293,7 +3148,7 @@ class Model:
         if isinstance(apps, (str, bytes, bytearray, memoryview)):
             raise TypeError(f"apps must be a Iterable[str], got {apps=}")
 
-        apps = frozenset(apps or self.applications)
+        apps = frozenset(apps or self._full_status().applications)
 
         if any(not isinstance(o, str) for o in apps):
             raise TypeError(f"apps must be a Iterable[str], got {apps=}")
@@ -3310,7 +3165,7 @@ class Model:
         while True:
             done = loop.next(
                 _idle.check(
-                    await self.get_status(),
+                    self._full_status(),
                     apps=apps,
                     raise_on_error=raise_on_error,
                     raise_on_blocked=raise_on_blocked,
