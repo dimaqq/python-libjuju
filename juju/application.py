@@ -146,6 +146,11 @@ class Application(model.ModelEntity):
 
     @property
     def units(self):
+        # FIXME need a live call to query units of this app
+        # would it be simpler to call FullStatus and get everything from there?
+        # - exposed: present
+        # - constraints: missing
+        # - units: present
         return [
             unit for unit in self.model.units.values() if unit.application == self.name
         ]
