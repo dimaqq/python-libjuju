@@ -1235,8 +1235,12 @@ class Model:
         the model.
 
         """
+        # FIXME: we'll create Unit instances on the fly here
         return self.state.units
 
+    # FIXME this attribute doesn't appear to be used,
+    # check library users carefully
+    # at least zaza uses app.subordinate_units, maybe not model.subordinate_units?
     @property
     def subordinate_units(self) -> dict[str, Unit]:
         """Return a map of unit-id:Unit for all subordiante units currently in
