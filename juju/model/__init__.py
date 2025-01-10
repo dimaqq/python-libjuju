@@ -1775,6 +1775,7 @@ class Model:
 
         return file_name, backup_metadata
 
+    @deprecated("Model.debug_log is deprecated and will be removed in v4")
     async def debug_log(
         self,
         target=sys.stdout,
