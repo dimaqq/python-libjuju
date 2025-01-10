@@ -38,7 +38,7 @@ import yaml
 from typing_extensions import deprecated
 
 from .. import provisioner, tag, utils
-from .._sync import ThreadedAsyncRunner, cache_until_await
+from .._sync import SyncCacheLine, ThreadedAsyncRunner, cache_until_await
 from ..annotationhelper import _get_annotations, _set_annotations
 from ..bundle import BundleHandler, get_charm_series, is_local_charm
 from ..charmhub import CharmHub
@@ -318,6 +318,11 @@ class ModelEntity:
     connected: bool
     connection: connection.Connection
     _status: str
+    # FIXME maybe refactor and set this dynamically in juju/_sync.py?
+    # for now, it's convenient for:
+    # - debugging during development
+    # - cleanup if we ever need that
+    _sync_cache: dict[str, SyncCacheLine]
 
     def __init__(
         self,
@@ -343,6 +348,7 @@ class ModelEntity:
         self.connected = connected
         self.connection = model.connection()
         self._status = "unknown"
+        self._sync_cache = {}
 
     def __repr__(self):
         return f'<{type(self).__name__} entity_id="{self.entity_id}">'
@@ -642,6 +648,7 @@ class Model:
     connector: connector.Connector
     state: ModelState
     _sync: ThreadedAsyncRunner | None = None
+    _sync_cache: dict[str, SyncCacheLine]
 
     def __init__(
         self,
@@ -675,6 +682,7 @@ class Model:
         self._watch_stopped = asyncio.Event()
         self._watch_received = asyncio.Event()
         self._watch_stopped.set()
+        self._sync_cache = {}
 
         self._charmhub = CharmHub(self)
 

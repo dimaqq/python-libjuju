@@ -324,6 +324,7 @@ class Connection:
         # not be covering the proxy
         sock = None
         server_hostname = None
+        # __import__("pdb").set_trace()
         if self.proxy is not None:
             sock = self.proxy.socket()
             server_hostname = "juju-app"
@@ -376,7 +377,10 @@ class Connection:
         self._debug_log_task = None
 
         if self.proxy is not None:
-            self.proxy.close()
+            # FIXME if explicit .close() is needed, explicit duplication is needed too.
+            # FIXME test this change
+            # self.proxy.close()
+            self.proxy = None
 
     async def _recv(self, request_id: int) -> dict[str, Any]:
         if not self.is_open:

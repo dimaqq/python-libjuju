@@ -31,9 +31,11 @@ class SyncCacheLine(Generic[R]):
 
 def cache_until_await(f: Callable[..., R]) -> Callable[..., R]:
     @functools.wraps(f)
-    def inner(self: juju.model.ModelEntity, *args, **kwargs) -> R:
+    def inner(self: juju.model.ModelEntity | juju.model.Model, *args, **kwargs) -> R:
+        # FIXME maybe refactor, set self._sync_cache dynamically
+        # then self doesn't need to be restricted to ModelEntity
         try:
-            assert isinstance(self, juju.model.ModelEntity)
+            assert isinstance(self, (juju.model.ModelEntity, juju.model.Model))
             cached: SyncCacheLine[R] = self._sync_cache.setdefault(
                 f.__name__,
                 SyncCacheLine(None, None),

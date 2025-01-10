@@ -103,9 +103,27 @@ class Connector:
                 raise ValueError(
                     f"Some authentication parameters are required : {','.join(required)}"
                 )
-            # FIXME ugly hack
-            # what if some values are not copyable or thread-safe?
-            self._kwargs_cache = kwargs.copy()
+            # FIXME
+            # What if some values are not copyable or thread-safe?
+            # bakery_client=macaroonbakery.httpbakery._client.Client()
+            # - GoCookieJar
+            #   - comes with own threading.RLock
+            # - WebBrowserInteractor
+            #   - ???
+            # proxy=juju.client.proxy.kubernetes.proxy.KubernetesProxy()
+            # - port_forwarder
+            #   - analyse kubernetes-client kubernetes/base/stream/stream.py
+            # - temp_ca_file
+            #   - rely on NamedTemporaryFile to cleanup on __del__()
+            # FIXME
+            # For each of the above:
+            # - either make sure it's thread-safe
+            # - or figure out to clone it
+
+            # __import__("pdb").set_trace()
+            # FIXME
+            # self._kwargs_cache = copy.deepcopy(kwargs)
+            self._kwargs_cache = copy.copy(kwargs)
             self._connection = await Connection.connect(**kwargs)
 
         # Check if we support the target controller

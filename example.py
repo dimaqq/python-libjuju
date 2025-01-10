@@ -1,11 +1,11 @@
 # Copyright 2025 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
 # FIXME temp only, don't merge this file
+import asyncio
 import logging
 import os
 import pprint
 
-from juju import jasyncio
 from juju.model import Model
 
 MODEL = os.environ.get("MODEL", "testm")
@@ -69,4 +69,4 @@ if __name__ == "__main__":
     # FIXME why is level=DEBUG broken?
     # logging.basicConfig(level="INFO", format="%(symbol)s %(message)s")
     # logging.root.addFilter(SymbolFilter())
-    jasyncio.run(main())
+    asyncio.run(main())
