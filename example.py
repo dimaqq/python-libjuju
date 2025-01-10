@@ -2,15 +2,18 @@
 # Licensed under the Apache V2, see LICENCE file for details.
 # FIXME temp only, don't merge this file
 import logging
+import os
 import pprint
 
 from juju import jasyncio
 from juju.model import Model
 
+MODEL = os.environ.get("MODEL", "testm")
+
 
 async def main() -> None:
     m = Model()
-    await m.connect(model_name="testm")
+    await m.connect(model_name=MODEL)
     # from juju.client._client import CharmsFacade
     # f = CharmsFacade.from_connection(m.connection())
     # rv = await f.CharmInfo("local:noble/fake-ingress-0")

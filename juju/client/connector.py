@@ -15,7 +15,6 @@ from juju.client.gocookies import GoCookieJar, go_to_py_cookie
 from juju.client.jujudata import API_ENDPOINTS_KEY, FileJujuData
 from juju.client.proxy.factory import proxy_from_config
 from juju.errors import JujuConnectionError, JujuError, JujuUnknownVersion
-from juju.version import CLIENT_VERSION
 
 log = logging.getLogger("connector")
 
@@ -104,23 +103,24 @@ class Connector:
                 raise ValueError(
                     f"Some authentication parameters are required : {','.join(required)}"
                 )
+            # FIXME ugly hack
+            # what if some values are not copyable or thread-safe?
+            self._kwargs_cache = kwargs.copy()
             self._connection = await Connection.connect(**kwargs)
 
         # Check if we support the target controller
-        server_version = self._connection.info["server-version"]
+        server_version: str = self._connection.info["server-version"]
         try:
             juju_server_version = version.parse(server_version)
         except version.InvalidVersion as err:
             # We're only interested in the major version, so
             # we attempt to clean up versions such as 3.4-rc1.2 as just 3.4
+            # and 4.0-beta5-ff58b90 as 4.0
             if "-" not in server_version:
                 raise JujuUnknownVersion(err)
             juju_server_version = version.parse(server_version.split("-")[0])
 
-        # CLIENT_VERSION statically comes from the VERSION file in the repo
-        client_version = version.parse(CLIENT_VERSION)
-
-        if juju_server_version.major != client_version.major:
+        if juju_server_version.major not in (3, 4):
             raise JujuConnectionError(
                 "juju server-version %s not supported" % juju_server_version
             )
