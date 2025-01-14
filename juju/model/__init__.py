@@ -915,6 +915,10 @@ class Model:
 
     async def disconnect(self):
         """Shut down the watcher task and close websockets."""
+        if self._sync:
+            self._sync.stop()
+            self._sync = None
+
         if not self._watch_stopped.is_set():
             log.debug("Stopping watcher task")
             self._watch_stopping.set()

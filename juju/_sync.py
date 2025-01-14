@@ -69,7 +69,8 @@ class ThreadedAsyncRunner(threading.Thread):
 
     @classmethod
     def new_connected(cls, *, connection_kwargs: dict[str, Any]) -> Self:
-        rv = cls()
+        # FIXME check if name= is allowed across all supported Pythons
+        rv = cls(name="AsyncRunner")
         rv.start()
         try:
             rv._conn = asyncio.run_coroutine_threadsafe(
@@ -99,8 +100,8 @@ class ThreadedAsyncRunner(threading.Thread):
         assert self._conn
         return self._conn
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
         self._conn = None
         self._loop = asyncio.new_event_loop()
 

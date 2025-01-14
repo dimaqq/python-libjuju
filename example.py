@@ -1,6 +1,8 @@
 # Copyright 2025 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
 # FIXME temp only, don't merge this file
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
@@ -19,11 +21,11 @@ async def main() -> None:
     # rv = await f.CharmInfo("local:noble/fake-ingress-0")
     # print(rv)
     # print()
-    from juju.client._client import ApplicationFacade
 
-    app = ApplicationFacade.from_connection(m.connection())
-    rv = await app.UnitsInfo()
-    print(rv)
+    # FIXME a little later
+    # app = ApplicationFacade.from_connection(m.connection())
+    # rv = await app.UnitsInfo()
+    # print(rv)
 
     # rv = await f.ApplicationsInfo(entities=[{"tag": "application-database"}])
     # print(rv)
@@ -47,26 +49,39 @@ async def main() -> None:
         for u in app.units:
             print(f"{u.name}: {u.agent_status!r} {u.workload_status!r}")
 
-    await m.wait_for_idle()
+    # __import__("pdb").set_trace()
+    await m.wait_for_idle(idle_period=1)
 
     await m.disconnect()
 
 
-class SymbolFilter(logging.Filter):
-    DEBUG = "🐛"
-    INFO = "ℹ️"  # noqa: RUF001
-    WARNING = "⚠️"
-    ERROR = "❌"
-    CRITICAL = "🔥"
+class SymbolFormatter(logging.Formatter):
+    levels = {
+        "DEBUG": "🐛",
+        "INFO": "ℹ️",  # noqa: RUF001
+        "WARNING": "⚠️",
+        "ERROR": "❌",
+        "CRITICAL": "🔥",
+    }
+    threads: dict[str | None, str] = {
+        "MainThread": "🧵",
+        "Kubernetes": "☸️",
+        "AsyncRunner": "🏃",
+        "Thread-1": "1️⃣",
+        "Thread-2": "2️⃣",
+    }
 
-    def filter(self, record):
-        record.symbol = getattr(self, record.levelname, "#")
-        # FIXME can control log record origin here if needed
-        return True
+    def format(self, record) -> str:
+        level = self.levels.get(record.levelname, "#")
+        thread = self.threads.get(record.threadName, record.threadName)
+        try:
+            task = record.taskName
+        except AttributeError:
+            task = "~"
+        return f"{level} {thread} {task} {record.msg}"
 
 
 if __name__ == "__main__":
-    # FIXME why is level=DEBUG broken?
-    # logging.basicConfig(level="INFO", format="%(symbol)s %(message)s")
-    # logging.root.addFilter(SymbolFilter())
+    logging.basicConfig(level="DEBUG" if os.environ.get("DEBUG") else "INFO")
+    logging.root.handlers[0].setFormatter(SymbolFormatter())
     asyncio.run(main())

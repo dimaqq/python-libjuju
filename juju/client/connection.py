@@ -567,8 +567,8 @@ class Connection:
             msg["params"] = {}
         if "version" not in msg:
             msg["version"] = self.facades[msg["type"]]
-        outgoing = json.dumps(msg, indent=2, cls=encoder)
-        log.debug(f"connection id: {id(self)} ---> {outgoing}")
+        outgoing = json.dumps(msg, cls=encoder)
+        log.debug(f"connection: {id(self)} ➡️ {outgoing}")
         for attempt in range(3):
             if self.monitor.status == Monitor.DISCONNECTED:
                 # closed cleanly; shouldn't try to reconnect
@@ -594,7 +594,7 @@ class Connection:
                     log.error("RPC: Automatic reconnect failed")
                     raise
         result = await self._recv(msg["request-id"])
-        log.debug(f"connection id : {id(self)} <--- {result}")
+        log.debug(f"connection: {id(self)} ⬅️ {result}")
 
         if not result:
             return result
