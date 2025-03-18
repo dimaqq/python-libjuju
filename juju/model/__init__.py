@@ -3025,7 +3025,7 @@ class Model:
         raise_on_error: bool = True,
         raise_on_blocked: bool = False,
         wait_for_active: bool = False,
-        timeout: float | None = 10 * 60,
+        timeout: float | None = 10 * 60 + 0.1,
         idle_period: float = 15,
         check_freq: float = 0.5,
         status: str | None = None,
