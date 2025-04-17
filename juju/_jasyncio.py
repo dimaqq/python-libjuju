@@ -47,7 +47,7 @@ def create_task_with_handler(
             # exception was never retrieved' anyways.
             logger.exception("Task %s raised an exception: %s" % (task_name, e))
 
-    task = asyncio.create_task(coro)
+    task = asyncio.create_task(coro, name=task_name)
     task.add_done_callback(
         functools.partial(_task_result_exp_handler, task_name=task_name, logger=logger)
     )
