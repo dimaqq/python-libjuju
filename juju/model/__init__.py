@@ -16,6 +16,7 @@ import stat
 import sys
 import tempfile
 import time
+import traceback
 import warnings
 import weakref
 import zipfile
@@ -447,6 +448,36 @@ class ModelEntity:
         raise `DeadEntityException`.
 
         """
+        try:
+            task = asyncio.current_task().get_name()  # type: ignore
+        except Exception as e:
+            task = str(e)
+
+        def name(frame_summary):
+            name = frame_summary.name
+            # Maybe extend this with the class name.
+            # That requires isnepct.stack() to get full frames.
+            if name in [
+                "<module>",
+                "run",
+                "run",
+                "run_until_complete",
+                "run_forever",
+                "_run_once",
+                "_run",
+            ]:
+                return None
+            return name
+
+        try:
+            stack = traceback.extract_stack()
+            stack = " ".join(filter(None, map(name, stack)))
+        except Exception as e:
+            stack = str(e)
+
+        if task not in ("AllWatcher",):
+            warnings.warn(f"⚠️safe_data {task=} {stack}", stacklevel=1)
+
         if self.data is None:
             raise DeadEntityException(
                 f"Entity {self.entity_type}:{self.entity_id} is dead - its attributes can no longer be "
@@ -880,7 +911,9 @@ class Model:
         async def watch_received_waiter():
             await self._watch_received.wait()
 
-        waiter = asyncio.create_task(watch_received_waiter())
+        waiter = asyncio.create_task(
+            watch_received_waiter(), name="WatchReceivedWaiter"
+        )
 
         # If we just wait for the _watch_received event and the _all_watcher task
         # fails (e.g. because API fails like migration is in progress), then
@@ -1433,7 +1466,7 @@ class Model:
         self._watch_received.clear()
         self._watch_stopping.clear()
         self._watch_stopped.clear()
-        self._watcher_task = asyncio.create_task(_all_watcher())
+        self._watcher_task = asyncio.create_task(_all_watcher(), name="AllWatcher")
 
     async def _notify_observers(self, delta, old_obj, new_obj):
         """Call observing callbacks, notifying them of a change in model state
