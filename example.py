@@ -33,14 +33,16 @@ async def main() -> None:
 
     for app_name, app in m.applications.items():
         pprint.pprint(app.model.state.state["application"][app_name][-1])
+
+        # Deprecated:
+        # owner_tag.......... {app.owner_tag!r}
+        # min_units.......... {app.min_units!r}
         print(f"""{app_name}:
         name............... {app.name!r}
         charm_name......... {app.charm_name!r}
         exposed............ {app.exposed!r}
         charm_url.......... {app.charm_url!r}
-        owner_tag.......... {app.owner_tag!r}
         life............... {app.life!r}
-        min_units.......... {app.min_units!r}
         constraints["arch"] {app.constraints["arch"]!r}
         subordinate........ {app.subordinate!r}
         status............. {app.status!r}
@@ -74,14 +76,16 @@ class SymbolFormatter(logging.Formatter):
     def format(self, record) -> str:
         level = self.levels.get(record.levelname, "#")
         thread = self.threads.get(record.threadName, record.threadName)
-        try:
-            task = record.taskName
-        except AttributeError:
-            task = "~"
-        return f"{level} {thread} {task} {record.msg}"
+        task = getattr(record, "taskName", "~")
+        message = record.getMessage()
+        return f"{level} {thread} {task} {message}"
+
+
+async def wrapped_main():
+    await asyncio.create_task(main(), name="Main")
 
 
 if __name__ == "__main__":
     logging.basicConfig(level="DEBUG" if os.environ.get("DEBUG") else "INFO")
     logging.root.handlers[0].setFormatter(SymbolFormatter())
-    asyncio.run(main())
+    asyncio.run(wrapped_main())
