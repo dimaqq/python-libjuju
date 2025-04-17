@@ -6,7 +6,9 @@ import asyncio
 import hashlib
 import json
 import logging
+import warnings
 from pathlib import Path
+from typing import Any
 
 from typing_extensions import deprecated
 from typing_extensions import reveal_type as reveal_type  # FIXME temp
@@ -87,16 +89,47 @@ class Application(model.ModelEntity):
         return rv
 
     @property
-    @deprecated("Application.subordinate is deprecated and will be removed in v4")
-    def subordinate(self) -> bool:
-        return self.safe_data["subordinate"]
+    def _application_status(self):
+        rv = self.model._full_status().applications[self.name]
+        # FIXME: consider raising a custom exception, because it may be that:
+        # - an application is deployed in a test
+        # - test code keeps the Application object
+        # - application object is removed (by the test or out of band)
+        # - test code accesses the stale object
+        assert rv
+        return rv
 
     @property
-    @deprecated(
-        "Application.workload_version is deprecated and will be removed in v4, use Unit.workload_version instead."
-    )
+    def subordinate(self) -> bool:
+        rv = bool(self._application_status.subordinate_to)
+        self._validate_legacy(rv, key="subordinate")
+        return rv
+
+    def _validate_legacy(self, new: Any, *, key: str) -> None:
+        """Warn if the value received the new way differs from that in safe data.
+
+        Note: this is temporary, and only for Juju 3.x.
+
+        We're typically relying on the result of the FullStatus jRPC response
+        to get each field that the user may look up on this object.
+
+        There could be minute differences between FullStatus and the AllWatcher delta.
+        We want to catch these early in development.
+
+        Note that a mismatch may occur because the data sources are not synchronised.
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            legacy: Any = self.safe_data[key]
+        if new != legacy:
+            warnings.warn(f"Application field mismatch {new=} {legacy=}", stacklevel=3)
+
+    @property
     def workload_version(self) -> str:
-        return self.safe_data["workload-version"]
+        rv = self._application_status.workload_version
+        assert isinstance(rv, str)
+        self._validate_legacy(rv, key="workload-version")
+        return rv
 
     @cache_until_await
     def _application_get(self) -> ApplicationGetResults:
@@ -692,13 +725,15 @@ class Application(model.ModelEntity):
         return rv
 
     @property
-    @deprecated("Application.charm_url is deprecated and will be removed in v4")
-    def charm_url(self):
+    def charm_url(self) -> str:
         """Get the charm url for this application
 
         :return str: The charm url
         """
-        return self.safe_data["charm-url"]
+        rv = self._application_status.charm
+        assert isinstance(rv, str)
+        self._validate_legacy(rv, key="charm-url")
+        return rv
 
     async def get_annotations(self):
         """Get annotations on this application.
