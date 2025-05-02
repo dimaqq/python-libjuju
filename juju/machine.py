@@ -1,10 +1,12 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
 import asyncio
 import ipaddress
 import logging
 import typing
+import warnings
 
 from backports.datetime_fromisoformat import datetime_fromisoformat
 
@@ -14,6 +16,9 @@ from . import model, tag
 from .annotationhelper import _get_annotations, _set_annotations
 from .client import client
 from .errors import JujuError
+
+if typing.TYPE_CHECKING:
+    from .client._definitions import MachineStatus
 
 log = logging.getLogger(__name__)
 
@@ -211,6 +216,7 @@ class Machine(model.ModelEntity):
         # mitigate that effect.
         retry_backoff = 2
         retries = 10
+        process = stdout = stderr = None
         for _ in range(retries):
             process = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -219,6 +225,11 @@ class Machine(model.ModelEntity):
             if process.returncode == 0:
                 break
             await asyncio.sleep(retry_backoff)
+
+        assert process
+        assert stdout is not None
+        assert stderr is not None
+
         if process.returncode != 0:
             raise JujuError(
                 f"command failed: {cmd} after {retries} attempts, with {stderr.decode()}"
@@ -226,20 +237,51 @@ class Machine(model.ModelEntity):
         # stdout is a bytes-like object, returning a string might be more useful
         return stdout.decode()
 
+    def _this_machine(self) -> MachineStatus:
+        rv = self.model._full_status().machines[self.entity_id]
+        assert rv
+        return rv
+
+    def _validate_legacy(self, new: typing.Any, *, key: list[str]) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=model.LegacyWarning)
+            if self.safe_data is model.JUJU4_NO_SAFE_DATA:
+                return
+            legacy = self.safe_data
+            for k in key:
+                legacy = legacy[k]
+            if new != legacy:
+                warnings.warn(f"Machine {key} mismatch {new=} {legacy=}", stacklevel=3)
+
     @property
-    def addresses(self) -> typing.List[str]:
+    def addresses(self) -> list[str]:
         """Returns the machine addresses."""
-        return self.safe_data["addresses"] or []
+        rv: list[str] = []
+        for addr in self._this_machine().ip_addresses or []:
+            assert isinstance(addr, str)
+            rv.append(addr)
+        self._validate_legacy(rv, key=["addresses"])
+        return rv
 
     @property
-    def agent_status(self):
+    def agent_status(self) -> str:
         """Returns the current Juju agent status string."""
-        return self.safe_data["agent-status"]["current"]
+        st = self._this_machine().agent_status
+        assert st
+        rv = st.status
+        self._validate_legacy(rv, key=["agent-status", "current"])
+        assert isinstance(rv, str)
+        return rv
 
     @property
-    def agent_status_since(self):
+    def agent_status_since(self) -> str:
         """Get the time when the `agent_status` was last updated."""
-        return datetime_fromisoformat(self.safe_data["agent-status"]["since"])
+        st = self._this_machine().agent_status
+        assert st
+        rv = st.since
+        self._validate_legacy(rv, key=["agent-status", "since"])
+        assert isinstance(rv, str)
+        return rv
 
     @property
     def agent_version(self):

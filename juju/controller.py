@@ -787,6 +787,7 @@ class Controller:
         """Offers list information about applications' endpoints that have been
         shared and who is connected.
         """
+        # FIXME used in a single integration test, not COU
         params = client.OfferFilter()
         params.model_name = model_name
 

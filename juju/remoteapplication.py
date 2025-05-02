@@ -9,6 +9,7 @@ log = logging.getLogger(__name__)
 
 
 class RemoteApplication(model.ModelEntity):
+    # FIXME unused in integration tests and COU
     @property
     def status(self):
         """Get the application status, as set by the charm's leader."""
@@ -25,6 +26,7 @@ class RemoteApplication(model.ModelEntity):
 
 
 class ApplicationOffer(model.ModelEntity):
+    # FIXME unused in integration tests and COU
     @property
     def tag(self):
         return tag.application(self.name)

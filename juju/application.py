@@ -8,7 +8,7 @@ import json
 import logging
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from typing_extensions import deprecated
 from typing_extensions import reveal_type as reveal_type  # FIXME temp
@@ -21,6 +21,7 @@ from .client import _definitions, client
 from .client._definitions import (
     ApplicationGetResults,
     ApplicationResult,
+    ApplicationStatus,
     Value,
 )
 from .errors import JujuApplicationConfigError, JujuError
@@ -53,22 +54,34 @@ class Application(model.ModelEntity):
 
     @property
     def exposed(self) -> bool:
-        rv = self._application_info().exposed
+        rv = self._application_status.exposed
+        self._validate_legacy(rv, key="exposed")
         assert rv is not None
         return rv
 
     @property
     @deprecated("Application.owner_tag is deprecated and will be removed in v4")
     def owner_tag(self) -> str:
+        if self.safe_data is model.JUJU4_NO_SAFE_DATA:
+            raise NotImplementedError(
+                "application.owner_tag is not available in Juju 4"
+            )
         return self.safe_data["owner-tag"]
 
     @property
     def life(self) -> str:
-        return self.safe_data["life"]
+        rv = self._application_status.life
+        self._validate_legacy(rv, key="life")
+        assert isinstance(rv, str)
+        return rv
 
     @property
     @deprecated("Application.min_units is deprecated and will be removed in v4")
     def min_units(self) -> int:
+        if self.safe_data is model.JUJU4_NO_SAFE_DATA:
+            raise NotImplementedError(
+                "application.min_units is not available in Juju 4"
+            )
         return self.safe_data["min-units"]
 
     # Well, this attribute is lovely:
@@ -78,9 +91,10 @@ class Application(model.ModelEntity):
     # - no unit tests in this repo
     # - no integration tests in this repo
     # Why was it here in the first place?
-    # @property
-    # def constraints(self) -> dict[str, str | int | bool]:
-    #     return FIXME_to_dict(self.constraints_object)
+    @property
+    @deprecated("Application.constraints is deprecated and will be removed in v4")
+    def constraints(self) -> Mapping[str, str | int | bool]:
+        return self.constraints_object.serialize()  # type: ignore
 
     @property
     def constraints_object(self) -> Value:
@@ -89,7 +103,7 @@ class Application(model.ModelEntity):
         return rv
 
     @property
-    def _application_status(self):
+    def _application_status(self) -> ApplicationStatus:
         rv = self.model._full_status().applications[self.name]
         # FIXME: consider raising a custom exception, because it may be that:
         # - an application is deployed in a test
@@ -119,10 +133,12 @@ class Application(model.ModelEntity):
         Note that a mismatch may occur because the data sources are not synchronised.
         """
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=UserWarning)
+            warnings.simplefilter("ignore", category=model.LegacyWarning)
+            if self.safe_data is model.JUJU4_NO_SAFE_DATA:
+                return
             legacy: Any = self.safe_data[key]
         if new != legacy:
-            warnings.warn(f"Application field mismatch {new=} {legacy=}", stacklevel=3)
+            warnings.warn(f"Application {key} mismatch {new=} {legacy=}", stacklevel=3)
 
     @property
     def workload_version(self) -> str:
@@ -209,22 +225,44 @@ class Application(model.ModelEntity):
         return apps
 
     @property
-    def status(self):
+    def status(self) -> str:
         """Get the application status.
 
         If the application is unknown it will attempt to derive the unit
         workload status and highlight the most relevant (severity).
         """
-        status = self.safe_data["status"]["current"]
-        if status == "unset":
-            known_statuses = [unit.workload_status for unit in self.units]
-            # If the self.get_status() is called (i.e. the status
-            # is received by FullStatus from the API) then add
-            # that into this computation as it might be more up
-            # to date (and more severe).
-            known_statuses.append(self._status)
-            return derive_status(known_statuses)
-        return status
+        assert self._application_status.status
+        assert isinstance(self._application_status.status.status, str)
+        rv = self._application_status.status.status
+        if rv == "unset":
+            candidates = [rv]
+            us = model._idle.app_units(self.model._full_status(), self.name)
+            for unit_status in us.values():
+                assert unit_status.workload_status
+                assert isinstance(unit_status.workload_status.status, str)
+                candidates.append(unit_status.workload_status.status)
+            rv = derive_status(candidates)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=model.LegacyWarning)
+            if self.safe_data is not model.JUJU4_NO_SAFE_DATA:
+                legacy = self.safe_data["status"]["current"]
+
+                if legacy == "unset":
+                    known_statuses = [unit.workload_status for unit in self.units]
+                    # If the self.get_status() is called (i.e. the status
+                    # is received by FullStatus from the API) then add
+                    # that into this computation as it might be more up
+                    # to date (and more severe).
+                    known_statuses.append(self._status)
+                    legacy = derive_status(known_statuses)
+
+                if rv != legacy:
+                    warnings.warn(
+                        f"Application status mismatch {rv=} {legacy=}", stacklevel=2
+                    )
+
+        return rv
 
     @property
     def status_message(self):

@@ -84,6 +84,15 @@ R = TypeVar("R")
 
 log = logger = logging.getLogger(__name__)
 
+JUJU4_NO_SAFE_DATA = {}
+"""This singleton is the value of .safe_data when current model driven by Juju 4 controller."""
+
+
+class LegacyWarning(UserWarning):
+    """Issued when legacy code path accesses safe data."""
+
+    pass
+
 
 class _Observer:
     """Wrapper around an observer callable.
@@ -191,6 +200,7 @@ class ModelState:
         type ``entity_type``.
 
         """
+        # FIXME stopped here...
         return {
             entity_id: self.get_entity(entity_type, entity_id)
             for entity_id, history in self.state.get(entity_type, {}).items()
@@ -211,6 +221,7 @@ class ModelState:
         applications currently in the model.
 
         """
+        # FIXME unused in integration tests and COU
         return self._live_entity_map("remoteApplication")
 
     @property
@@ -218,6 +229,7 @@ class ModelState:
         """Return a map of application-name:Application for all applications
         offers currently in the model.
         """
+        # FIXME unused in integration tests and COU
         return self._live_entity_map("applicationOffer")
 
     @property
@@ -476,7 +488,9 @@ class ModelEntity:
             stack = str(e)
 
         if task not in ("AllWatcher",):
-            warnings.warn(f"⚠️safe_data {task=} {stack}", stacklevel=1)
+            warnings.warn(
+                f"⚠️safe_data {task=} {stack}", category=LegacyWarning, stacklevel=1
+            )
 
         if self.data is None:
             raise DeadEntityException(
@@ -978,6 +992,8 @@ class Model:
         :param series: Charm series
 
         """
+        # FIXME this method is not directly used by integration tests, pytest-operator or COU
+        # However, if it called by .deploy() if the charm url refers to a local directory.
         charm_dir = Path(charm_dir)
         if charm_dir.suffix == ".charm":
             fn = charm_dir
@@ -1257,14 +1273,16 @@ class Model:
         applications currently in the model.
 
         """
-        return self.state.remote_applications
+        raise NotImplementedError("not used anywhere, ask @dimaqq if you need this")
+        # return self.state.remote_applications
 
     @property
     def application_offers(self) -> dict[str, ApplicationOffer]:
         """Return a map of application-name:Application for all applications
         offers currently in the model.
         """
-        return self.state.application_offers
+        raise NotImplementedError("not used anywhere, ask @dimaqq if you need this")
+        # return self.state.application_offers
 
     @property
     def machines(self) -> dict[str, Machine]:
@@ -1280,8 +1298,21 @@ class Model:
         the model.
 
         """
+        rv = {}
+        fs = self._full_status()
+        apps = fs.applications.keys()
+        for app_name in apps:
+            for unit_name in _idle.app_units(fs, app_name):
+                rv[unit_name] = Unit(unit_name, self)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=LegacyWarning)
+            legacy = self.state.units
+
+        if rv != legacy:
+            warnings.warn(f"Model units mismatch {rv=} {legacy=}", stacklevel=3)
         # FIXME: we'll create Unit instances on the fly here
-        return self.state.units
+        return rv
 
     # FIXME this attribute doesn't appear to be used,
     # check library users carefully
@@ -1744,6 +1775,10 @@ class Model:
             "{}:{}".format(app, data["name"]) for app, data in result.endpoints.items()
         ]
 
+        # FIXME this needs to go in Juju 4
+        # This essentially waits for AllWatcher stream to catch up with the
+        # result of the of the AddRelation() call.
+        # Ofc., we could just look at the FullStatus response...
         await self.block_until(lambda: _find_relation(*specs) is not None)
         return _find_relation(*specs)
 
@@ -2830,6 +2865,7 @@ class Model:
         """Offers list information about applications' endpoints that have been
         shared and who is connected.
         """
+        # FIXME used by a single integration test, not COU
         async with ConnectedController(self.connection()) as controller:
             return await controller.list_offers(self.name)
 

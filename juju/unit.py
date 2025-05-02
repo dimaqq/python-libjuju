@@ -2,14 +2,18 @@
 # Licensed under the Apache V2, see LICENCE file for details.
 
 import logging
+import warnings
+from typing import Any, List, Optional
 
-from backports.datetime_fromisoformat import datetime_fromisoformat
-
-from juju.errors import JujuAPIError, JujuError
+from juju.errors import JujuError
+from juju.machine import Machine
 
 from . import model, tag
 from .annotationhelper import _get_annotations, _set_annotations
 from .client import client
+from .client._definitions import (
+    UnitStatus,
+)
 
 log = logging.getLogger(__name__)
 
@@ -20,63 +24,134 @@ class Unit(model.ModelEntity):
         return self.entity_id
 
     @property
-    def agent_status(self):
+    def _unit_status(self) -> UnitStatus:
+        app = self.name.split("/")[0]
+        return model._idle.app_units(self.model._full_status(), app)[self.entity_id]
+
+    def _validate_legacy(self, new: Any, *, key: List[str]) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=model.LegacyWarning)
+            if self.safe_data is model.JUJU4_NO_SAFE_DATA:
+                return
+            legacy = self.safe_data
+            for k in key:
+                legacy = legacy[k]
+            if new != legacy:
+                warnings.warn(f"Unit {key} mismatch {new=} {legacy=}", stacklevel=3)
+
+    @property
+    def agent_status(self) -> str:
         """Returns the current agent status string."""
-        return self.safe_data["agent-status"]["current"]
+        assert self._unit_status.agent_status
+        rv = self._unit_status.agent_status.status
+        self._validate_legacy(rv, key=["agent-status", "current"])
+        assert isinstance(rv, str)
+        return rv
 
     @property
-    def agent_status_since(self):
+    def agent_status_since(self) -> str:
         """Get the time when the `agent_status` was last updated."""
-        return datetime_fromisoformat(self.safe_data["agent-status"]["since"])
+        assert self._unit_status.agent_status
+        rv = self._unit_status.agent_status.since
+        self._validate_legacy(rv, key=["agent-status", "since"])
+        assert isinstance(rv, str)
+        return rv
 
     @property
-    def is_subordinate(self):
+    def is_subordinate(self) -> bool:
         """True if the unit is subordinate of another unit"""
-        return self.safe_data["subordinate"]
+        rv = False
+        for app in self.model._full_status().applications.values():
+            assert app
+            for unit in app.units.values():
+                assert unit
+                if self.entity_id in unit.subordinates:
+                    rv = True
+        self._validate_legacy(rv, key=["subordinate"])
+        return rv
 
     @property
-    def principal_unit(self):
+    def principal_unit(self) -> str:
         """Returns the name of the unit of which this unit is a subordinate to.
         Returns '' for principal units themselves.
         """
-        return self.safe_data["principal"]
+        rv = ""
+        for app in self.model._full_status().applications.values():
+            assert app
+            for unit_name, unit in app.units.items():
+                assert unit
+                if self.entity_id in unit.subordinates:
+                    rv = unit_name
+        self._validate_legacy(rv, key=["principal"])
+        return rv
 
     @property
-    def agent_status_message(self):
+    def agent_status_message(self) -> str:
         """Get the agent status message."""
-        return self.safe_data["agent-status"]["message"]
+        assert self._unit_status.agent_status
+        rv = self._unit_status.agent_status.info
+        self._validate_legacy(rv, key=["agent-status", "message"])
+        assert isinstance(rv, str)
+        return rv
 
     @property
     def workload_status(self):
         """Returns the current workload status string."""
-        return self.safe_data["workload-status"]["current"]
+        assert self._unit_status.workload_status
+        rv = self._unit_status.workload_status.status
+        self._validate_legacy(rv, key=["workload-status", "current"])
+        assert isinstance(rv, str)
+        return rv
 
     @property
-    def workload_status_since(self):
+    def workload_status_since(self) -> str:
         """Get the time when the `workload_status` was last updated."""
-        return datetime_fromisoformat(self.safe_data["workload-status"]["since"])
+        assert self._unit_status.workload_status
+        rv = self._unit_status.workload_status.since
+        self._validate_legacy(rv, key=["workload-status", "since"])
+        assert isinstance(rv, str)
+        return rv
 
     @property
     def workload_status_message(self):
         """Get the workload status message."""
-        return self.safe_data["workload-status"]["message"]
+        assert self._unit_status.workload_status
+        rv = self._unit_status.workload_status.info
+        self._validate_legacy(rv, key=["workload-status", "message"])
+        assert isinstance(rv, str)
+        return rv
+
+    def _machine_id(self) -> str:
+        # k8s: the machine field is always an empty string
+        # vms: the field is an empty string for the nested, subordinate unit status
+        #      it is, however, set on the main unit statu
+        if goto := self.principal_unit:
+            return self.model.units[goto]._machine_id()
+        rv = self._unit_status.machine
+        assert isinstance(rv, str)
+        return rv
 
     @property
-    def machine(self):
+    def machine(self) -> Optional[Machine]:
         """Get the machine object for this unit."""
-        machine_id = self.safe_data["machine-id"]
+        machine_id = self._machine_id()
+        self._validate_legacy(machine_id, key=["machine-id"])
         if machine_id:
             return self.model.machines.get(machine_id, None)
         else:
             return None
 
     @property
-    def public_address(self):
+    def public_address(self) -> Optional[str]:
         """Get the public address.
 
+        FICME: not so deprecated?
         This property is deprecated, use get_public_address method.
         """
-        return self.safe_data["public-address"] or None
+        rv = self._unit_status.public_address
+        self._validate_legacy(rv, key=["public-address"])
+        assert isinstance(rv, (str, type(None)))
+        return rv or None
 
     @property
     def tag(self):
@@ -88,9 +163,7 @@ class Unit(model.ModelEntity):
         :return [Unit]
         """
         return [
-            u
-            for u_name, u in self.model.units.items()
-            if u.is_subordinate and u.principal_unit == self.name
+            u for u in self.model.units.values() if u.principal_unit == self.entity_id
         ]
 
     async def destroy(
@@ -120,15 +193,18 @@ class Unit(model.ModelEntity):
 
         :return int public-address
         """
-        addr = self.safe_data["public-address"] or None
-        if addr is not None:
-            return addr
+        # FIXME: if we're getting the latest FullStatus, can I rely on the data?
+        return self.public_address
 
-        app_facade = client.ApplicationFacade.from_connection(self.connection)
-        def_result = await app_facade.UnitsInfo(entities=[client.Entity(self.tag)])
-        if def_result is not None and len(def_result.results) > 1:
-            raise JujuAPIError("expected one result")
-        return def_result.results[0].result.get("public-address", None)
+        # addr = self.safe_data["public-address"] or None
+        # if addr is not None:
+        #     return addr
+
+        # app_facade = client.ApplicationFacade.from_connection(self.connection)
+        # def_result = await app_facade.UnitsInfo(entities=[client.Entity(self.tag)])
+        # if def_result is not None and len(def_result.results) > 1:
+        #     raise JujuAPIError("expected one result")
+        # return def_result.results[0].result.get("public-address", None)
 
     async def resolved(self, retry=False):
         """Mark unit errors resolved.
