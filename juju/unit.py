@@ -1,19 +1,21 @@
 # Copyright 2023 Canonical Ltd.
 # Licensed under the Apache V2, see LICENCE file for details.
+from __future__ import annotations
 
 import logging
 import warnings
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from juju.errors import JujuError
-from juju.machine import Machine
 
 from . import model, tag
 from .annotationhelper import _get_annotations, _set_annotations
 from .client import client
-from .client._definitions import (
-    UnitStatus,
-)
+
+if TYPE_CHECKING:
+    from juju.machine import Machine
+
+    from .client._definitions import UnitStatus
 
 log = logging.getLogger(__name__)
 
@@ -24,11 +26,15 @@ class Unit(model.ModelEntity):
         return self.entity_id
 
     @property
+    def application(self) -> str:
+        return self.entity_id.split("/")[0]
+
+    @property
     def _unit_status(self) -> UnitStatus:
         app = self.name.split("/")[0]
         return model._idle.app_units(self.model._full_status(), app)[self.entity_id]
 
-    def _validate_legacy(self, new: Any, *, key: List[str]) -> None:
+    def _validate_legacy(self, new: Any, *, key: list[str]) -> None:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=model.LegacyWarning)
             if self.safe_data is model.JUJU4_NO_SAFE_DATA:
@@ -132,7 +138,7 @@ class Unit(model.ModelEntity):
         return rv
 
     @property
-    def machine(self) -> Optional[Machine]:
+    def machine(self) -> Machine | None:
         """Get the machine object for this unit."""
         machine_id = self._machine_id()
         self._validate_legacy(machine_id, key=["machine-id"])
@@ -142,7 +148,7 @@ class Unit(model.ModelEntity):
             return None
 
     @property
-    def public_address(self) -> Optional[str]:
+    def public_address(self) -> str | None:
         """Get the public address.
 
         FICME: not so deprecated?

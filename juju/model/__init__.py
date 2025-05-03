@@ -1298,6 +1298,8 @@ class Model:
         the model.
 
         """
+        from ..unit import Unit
+
         rv = {}
         fs = self._full_status()
         apps = fs.applications.keys()
@@ -1309,9 +1311,10 @@ class Model:
             warnings.simplefilter("ignore", category=LegacyWarning)
             legacy = self.state.units
 
-        if rv != legacy:
-            warnings.warn(f"Model units mismatch {rv=} {legacy=}", stacklevel=3)
-        # FIXME: we'll create Unit instances on the fly here
+        if set(rv) != set(legacy):
+            warnings.warn(
+                f"Model units mismatch {set(rv)=} {set(legacy)=}", stacklevel=3
+            )
         return rv
 
     # FIXME this attribute doesn't appear to be used,

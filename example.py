@@ -8,14 +8,17 @@ import logging
 import os
 import pprint
 
+from juju.client.jujudata import FileJujuData
 from juju.model import Model
 
-MODEL = os.environ.get("MODEL", "testm")
+MODEL = os.environ.get("MODEL")
 
 
-async def main() -> None:
+async def main(model_name=MODEL) -> None:
+    if not model_name:
+        model_name = FileJujuData().current_model()
     m = Model()
-    await m.connect(model_name=MODEL)
+    await m.connect(model_name=model_name)
     # from juju.client._client import CharmsFacade
     # f = CharmsFacade.from_connection(m.connection())
     # rv = await f.CharmInfo("local:noble/fake-ingress-0")

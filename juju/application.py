@@ -8,7 +8,7 @@ import json
 import logging
 import warnings
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from typing_extensions import deprecated
 from typing_extensions import reveal_type as reveal_type  # FIXME temp
@@ -17,21 +17,24 @@ from . import model, tag, utils
 from ._sync import cache_until_await
 from .annotationhelper import _get_annotations, _set_annotations
 from .bundle import get_charm_series, is_local_charm
-from .client import _definitions, client
-from .client._definitions import (
-    ApplicationGetResults,
-    ApplicationResult,
-    ApplicationStatus,
-    Value,
-)
+from .client import client
+from .client._definitions import Value
 from .errors import JujuApplicationConfigError, JujuError
 from .origin import Channel
 from .placement import parse as parse_placement
-from .relation import Relation
 from .status import derive_status
 from .url import URL
 from .utils import block_until
 from .version import DEFAULT_ARCHITECTURE
+
+if TYPE_CHECKING:
+    from .client._definitions import (
+        ApplicationGetResults,
+        ApplicationResult,
+        ApplicationStatus,
+        CharmOrigin,
+    )
+    from .relation import Relation
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +73,7 @@ class Application(model.ModelEntity):
 
     @property
     def life(self) -> str:
-        rv = self._application_status.life
+        rv = self._application_status.life or "alive"
         self._validate_legacy(rv, key="life")
         assert isinstance(rv, str)
         return rv
@@ -92,9 +95,15 @@ class Application(model.ModelEntity):
     # - no integration tests in this repo
     # Why was it here in the first place?
     @property
-    @deprecated("Application.constraints is deprecated and will be removed in v4")
+    # @deprecated("Application.constraints is deprecated and will be removed in v4")
     def constraints(self) -> Mapping[str, str | int | bool]:
-        return self.constraints_object.serialize()  # type: ignore
+        rv = {
+            k: v
+            for k, v in self.constraints_object.serialize().items()
+            if v is not None
+        }
+        self._validate_legacy(rv, key="constraints")
+        return rv  # type: ignore
 
     @property
     def constraints_object(self) -> Value:
@@ -132,6 +141,20 @@ class Application(model.ModelEntity):
 
         Note that a mismatch may occur because the data sources are not synchronised.
         """
+        # Sample self.safe_data:
+        #
+        # {'model-uuid': '5164e7b1-a80b-4681-8571-2eebc0d98951',
+        #  'name': 'hexanator',
+        #  'exposed': False,
+        #  'charm-url':
+        #  'local:hexanator-5',
+        #  'owner-tag': '',
+        #  'life': 'alive',
+        #  'min-units': 0,
+        #  'constraints': {'arch': 'amd64'},
+        #  'subordinate': False,
+        #  'status': {'current': 'unset', 'message': '', 'version': ''},
+        #  'workload-version': ''}
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=model.LegacyWarning)
             if self.safe_data is model.JUJU4_NO_SAFE_DATA:
@@ -141,7 +164,22 @@ class Application(model.ModelEntity):
             warnings.warn(f"Application {key} mismatch {new=} {legacy=}", stacklevel=3)
 
     @property
+    @deprecated("FIXME Application.workload_version is plain weird!")
     def workload_version(self) -> str:
+        # FIXME: FullStatus contains workload-version for both:
+        # * each application
+        # * each unit in each application
+        # Arguably the latter is more "correct", as unit could be heterogeneous during upgrade
+        #
+        # At the same time, safe_data (deltas) contains workload-version for:
+        # * each application, but the value is '' (empty string)
+        # * but not for units in applications
+        #
+        # So, like, how did it ever work before?
+        #
+        # To test:
+        # - [x] steady state, idle model with apps and units
+        # - [ ] model that goes through changes, like after deploy(app)
         rv = self._application_status.workload_version
         assert isinstance(rv, str)
         self._validate_legacy(rv, key="workload-version")
@@ -1048,7 +1086,7 @@ class Application(model.ModelEntity):
     async def local_refresh(
         self,
         *,
-        charm_origin: _definitions.CharmOrigin,
+        charm_origin: CharmOrigin,
         force: bool,
         force_series: bool,
         force_units: bool,
