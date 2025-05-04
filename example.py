@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import pprint
 
 from juju.client.jujudata import FileJujuData
 from juju.model import Model
@@ -34,8 +33,9 @@ async def main(model_name=MODEL) -> None:
     # print(rv)
     # print()
 
+    # __import__("pdb").set_trace()
     for app_name, app in m.applications.items():
-        pprint.pprint(app.model.state.state["application"][app_name][-1])
+        # pprint.pprint(app.model.state.state["application"][app_name][-1])
 
         # Deprecated:
         # owner_tag.......... {app.owner_tag!r}
@@ -46,7 +46,7 @@ async def main(model_name=MODEL) -> None:
         exposed............ {app.exposed!r}
         charm_url.......... {app.charm_url!r}
         life............... {app.life!r}
-        constraints["arch"] {app.constraints["arch"]!r}
+        constraints["arch"] {app.constraints.get("arch")!r}
         subordinate........ {app.subordinate!r}
         status............. {app.status!r}
         workload_version... {app.workload_version!r}

@@ -263,6 +263,8 @@ class ModelState:
 
     def entity_history(self, entity_type, entity_id):
         """Return the history deque for an entity."""
+        if self.state is JUJU4_NO_SAFE_DATA:
+            return JUJU4_NO_SAFE_DATA
         return self.state[entity_type][entity_id]
 
     def entity_data(self, entity_type, entity_id, history_index):
@@ -270,7 +272,10 @@ class ModelState:
         history.
 
         """
-        return self.entity_history(entity_type, entity_id)[history_index]
+        hist = self.entity_history(entity_type, entity_id)
+        if hist is JUJU4_NO_SAFE_DATA:
+            return JUJU4_NO_SAFE_DATA
+        return hist[history_index]
 
     def apply_delta(self, delta):
         """Apply delta to our state and return a copy of the
@@ -1265,7 +1270,22 @@ class Model:
         currently in the model.
 
         """
-        return self.state.applications
+        from ..application import Application
+
+        new = {
+            name: Application(name, self) for name in self._full_status().applications
+        }
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=LegacyWarning)
+            legacy = self.state.applications
+
+        if set(new) != set(legacy):
+            warnings.warn(
+                f"Model applications mismatch {set(new)=} {set(legacy)=}", stacklevel=3
+            )
+
+        return new
 
     @property
     def remote_applications(self) -> dict[str, RemoteApplication]:
@@ -1300,22 +1320,23 @@ class Model:
         """
         from ..unit import Unit
 
-        rv = {}
+        new = {}
         fs = self._full_status()
         apps = fs.applications.keys()
         for app_name in apps:
             for unit_name in _idle.app_units(fs, app_name):
-                rv[unit_name] = Unit(unit_name, self)
+                new[unit_name] = Unit(unit_name, self)
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=LegacyWarning)
-            legacy = self.state.units
+            if self.state.state is not JUJU4_NO_SAFE_DATA:
+                legacy = self.state.units
+                if set(new) != set(legacy):
+                    warnings.warn(
+                        f"Model.units mismatch {set(new)=} {set(legacy)=}", stacklevel=3
+                    )
 
-        if set(rv) != set(legacy):
-            warnings.warn(
-                f"Model units mismatch {set(rv)=} {set(legacy)=}", stacklevel=3
-            )
-        return rv
+        return new
 
     # FIXME this attribute doesn't appear to be used,
     # check library users carefully
@@ -1490,9 +1511,16 @@ class Model:
                     self._watch_received.set()
             except CancelledError:
                 pass
-            except Exception:
-                log.exception("Error in watcher")
-                raise
+            except Exception as e:
+                if "No facade AllWatcher in facades" in str(e):
+                    # FIXME make this pretty
+                    while not self._watch_stopping.is_set():
+                        self.state.state = JUJU4_NO_SAFE_DATA
+                        self._watch_received.set()
+                        await asyncio.sleep(0.5)
+                else:
+                    log.exception("Error in watcher")
+                    raise
             finally:
                 self._watch_stopped.set()
 

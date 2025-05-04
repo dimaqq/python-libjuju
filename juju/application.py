@@ -108,6 +108,13 @@ class Application(model.ModelEntity):
     @property
     def constraints_object(self) -> Value:
         rv = self._application_get().constraints
+        if rv is None:
+            # FIXME this only happens against Juju 4, not 3.6
+            warnings.warn(
+                f"Oddly, .ApplicationGetResults.constraints is None for {self.entity_id}, patching over",
+                stacklevel=3,
+            )
+            return Value()
         assert isinstance(rv, Value)  # FIXME #1249
         return rv
 
