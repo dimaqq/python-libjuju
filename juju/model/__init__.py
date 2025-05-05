@@ -1952,6 +1952,17 @@ class Model:
         trust=False,
         attach_storage=[],
     ):
+        # FIXME patch over with jubilant,
+        # because Charms facade evolved
+        # this library only knows v6, and juju4 only supports v8
+        # there probably are subtle differences wrt. base vs series...
+        # naive upgrade is not expected to work.
+        import jubilant
+
+        jubilant.Juju(model=self.name).deploy(
+            entity_url, app=application_name, resources=resources
+        )
+        return
         """Deploy a new service or bundle.
 
         :param str entity_url: Charm or bundle to deploy. Charm url or file path

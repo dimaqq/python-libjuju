@@ -362,8 +362,25 @@ class Controller:
 
         log.debug("Creating model %s", model_name)
 
+        # Short-circuit...
+        import jubilant
+
+        jubilant.Juju().add_model(model_name)
+
+        from juju.model import Model
+
+        m = Model()
+        await m.connect(model_name=model_name)
+        return m
+
         if not config or "authorized-keys" not in config:
             config = config or {}
+            # The correct way is probably:
+            # - check cloud type
+            # - - if it's k8s (any provider), don't add the ssh keys
+            # - - otherwise (many options), try to add the ssh keys
+            #
+            # FIXME blocked out for now, because Juju 4 doesn't like this.
             config["authorized-keys"] = await utils.read_ssh_key()
 
         model_info = await model_facade.CreateModel(
