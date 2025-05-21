@@ -82,7 +82,7 @@ class CleanModel:
         # Some charms used for testing are not yet available for 24.04
         await self._model.set_config({
             "default-base": "ubuntu@22.04",
-            "default-series": "jammy",
+            # "default-series": "jammy",  # not allowed to set both
         })
 
         # Change the JujuData instance so that it will return the new
