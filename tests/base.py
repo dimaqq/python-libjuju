@@ -79,6 +79,12 @@ class CleanModel:
         model_name = f"test-{test_run_nonce}-{test_name}-{model_nonce}"
         self._model = await self._controller.add_model(model_name)
 
+        # Some charms used for testing are not yet available for 24.04
+        await self._model.set_config({
+            "default-base": "ubuntu@22.04",
+            "default-series": "jammy",
+        })
+
         # Change the JujuData instance so that it will return the new
         # model as the current model name, so that we'll connect
         # to it by default.
