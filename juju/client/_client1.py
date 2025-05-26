@@ -32,45 +32,6 @@ class CredentialManagerFacade(Type):
         return reply
 
 
-class FirewallRulesFacade(Type):
-    name = "FirewallRules"
-    version = 1
-
-    @ReturnMapping(ListFirewallRulesResults)
-    async def ListFirewallRules(self):
-        """ListFirewallRules returns all the firewall rules.
-
-        Returns -> ListFirewallRulesResults
-        """
-        # map input types to rpc msg
-        _params = dict()
-        msg = dict(
-            type="FirewallRules", request="ListFirewallRules", version=1, params=_params
-        )
-
-        reply = await self.rpc(msg)
-        return reply
-
-    @ReturnMapping(ErrorResults)
-    async def SetFirewallRules(self, args=None):
-        """SetFirewallRules creates or updates the specified firewall rules.
-
-        args : typing.Sequence[~FirewallRule]
-        Returns -> ErrorResults
-        """
-        if args is not None and not isinstance(args, (bytes, str, list)):
-            raise Exception(f"Expected args to be a Sequence, received: {type(args)}")
-
-        # map input types to rpc msg
-        _params = dict()
-        msg = dict(
-            type="FirewallRules", request="SetFirewallRules", version=1, params=_params
-        )
-        _params["args"] = args
-        reply = await self.rpc(msg)
-        return reply
-
-
 class ImageMetadataManagerFacade(Type):
     name = "ImageMetadataManager"
     version = 1
@@ -515,36 +476,5 @@ class SecretBackendsFacade(Type):
             params=_params,
         )
         _params["args"] = args
-        reply = await self.rpc(msg)
-        return reply
-
-
-class SecretsFacade(Type):
-    name = "Secrets"
-    version = 1
-
-    @ReturnMapping(ListSecretResults)
-    async def ListSecrets(self, filter_=None, show_secrets=None):
-        """ListSecrets lists available secrets.
-
-        filter_ : SecretsFilter
-        show_secrets : bool
-        Returns -> ListSecretResults
-        """
-        if filter_ is not None and not isinstance(filter_, (dict, SecretsFilter)):
-            raise Exception(
-                f"Expected filter_ to be a SecretsFilter, received: {type(filter_)}"
-            )
-
-        if show_secrets is not None and not isinstance(show_secrets, bool):
-            raise Exception(
-                f"Expected show_secrets to be a bool, received: {type(show_secrets)}"
-            )
-
-        # map input types to rpc msg
-        _params = dict()
-        msg = dict(type="Secrets", request="ListSecrets", version=1, params=_params)
-        _params["filter"] = filter_
-        _params["show-secrets"] = show_secrets
         reply = await self.rpc(msg)
         return reply

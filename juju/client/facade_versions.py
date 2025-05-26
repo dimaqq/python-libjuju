@@ -12,17 +12,16 @@ client_facade_versions = {
     "AllModelWatcher": (4,),
     "AllWatcher": (3,),
     "Annotations": (2,),
-    "Application": (17, 19, 20),
+    "Application": (20,),
     "ApplicationOffers": (4, 5),
     "Backups": (3,),
     "Block": (2,),
     "Bundle": (6,),
-    "Charms": (6,),
-    "Client": (6, 7, 8),
+    "Charms": (7,),
+    "Client": (7, 8),
     "Cloud": (7,),
     "Controller": (11, 12),
     "CredentialManager": (1,),
-    "FirewallRules": (1,),
     "HighAvailability": (2,),
     "ImageMetadataManager": (1,),
     "KeyManager": (1,),
@@ -30,7 +29,7 @@ client_facade_versions = {
     "MetricsDebug": (2,),
     "ModelConfig": (3,),
     "ModelGeneration": (4,),
-    "ModelManager": (9, 10),
+    "ModelManager": (10,),
     "ModelUpgrader": (1,),
     "Payloads": (1,),
     "Pinger": (1,),
@@ -45,7 +44,7 @@ client_facade_versions = {
 }
 
 # Manual list of facades present in schemas + codegen which python-libjuju does not yet support
-excluded_facade_versions: Dict[str, Sequence[int]] = {"Charms": (7,)}
+excluded_facade_versions: Dict[str, Sequence[int]] = {}
 
 
 # We don't generate code for these, as we can never use them.
@@ -123,6 +122,9 @@ known_unsupported_facades = (
     "SecretsRevisionWatcher",
     "SecretsTriggerWatcher",
     "Singular",
+    "SSHServer",
+    "SSHSession",
+    "SSHTunneler",
     "StatusHistory",
     "StorageProvisioner",
     "StringsWatcher",

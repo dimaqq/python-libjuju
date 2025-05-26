@@ -988,11 +988,11 @@ class TestBundleHandler:
 
         connection_mock = mock.Mock()
         connection_mock.facades = {
-            "Bundle": 17,
-            "Client": 17,
-            "Application": 17,
-            "Annotations": 17,
-            "MachineManager": 17,
+            "Bundle": 6,
+            "Client": 8,
+            "Application": 20,
+            "Annotations": 2,
+            "MachineManager": 10,
         }
         model = mock.Mock()
         model.units = {}

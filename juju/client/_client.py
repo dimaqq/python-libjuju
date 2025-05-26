@@ -10,12 +10,9 @@ from juju.client import (
     _client6,
     _client7,
     _client8,
-    _client9,
     _client10,
     _client11,
     _client12,
-    _client17,
-    _client19,
     _client20,
 )
 from juju.client._definitions import *
@@ -25,15 +22,12 @@ CLIENTS = {
     "3": _client3,
     "4": _client4,
     "2": _client2,
-    "17": _client17,
+    "20": _client20,
+    "5": _client5,
     "6": _client6,
     "11": _client11,
     "1": _client1,
     "10": _client10,
-    "9": _client9,
-    "5": _client5,
-    "19": _client19,
-    "20": _client20,
     "8": _client8,
     "12": _client12,
 }
@@ -153,10 +147,6 @@ class CredentialManagerFacade(TypeFactory):
 
 
 class FacadeVersions(TypeFactory):
-    pass
-
-
-class FirewallRulesFacade(TypeFactory):
     pass
 
 
