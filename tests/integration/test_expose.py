@@ -12,12 +12,7 @@ from .. import base
 @pytest.mark.skip("Update charm")
 async def test_expose_unexpose():
     async with base.CleanModel() as model:
-        app = await model.deploy(
-            "ubuntu",
-        )
-
-        if not app.supports_granular_expose_parameters():
-            pytest.skip("this test requires a 2.9 or greater controller")
+        app = await model.deploy("ubuntu")
 
         # Expose all opened port ranges
         await app.expose()
